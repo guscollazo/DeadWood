@@ -1,0 +1,109 @@
+CREATE FUNCTION [dbo].[fn_CommaSeparatedListTOJoinList6_char]
+(
+	@CommaSeparatedList VARCHAR(1000)
+,	@char int
+,	@Table2IsMEMBERSTODELETE bit = 0
+)
+RETURNS VARCHAR(2000)
+AS
+BEGIN
+DECLARE @i INT, @rtnvalue VARCHAR(2000), @col VARCHAR(1000), @clause1 VARCHAR(2000), @clause2 VARCHAR(1000)
+
+SET @i = 1
+SET @rtnvalue = ''
+
+IF @Table2IsMEMBERSTODELETE=1
+BEGIN
+	IF @CommaSeparatedList = 'GroupID,MemberID,SiteID'
+	BEGIN
+		SET @CommaSeparatedList = 'GroupID,MemberID'
+	END
+END
+
+WHILE @i > 0
+BEGIN
+	SET @i = CHARINDEX(',', @CommaSeparatedList, @i)
+	IF @i > 0
+	BEGIN
+		SET @col = LEFT(@CommaSeparatedList, @i-1)
+		IF @col = 'CallingSystemID'
+			SET @col = 'GroupID'
+		IF @col = 'SiteID'
+			SET @col = 'GroupID'
+		IF @col = 'DomainID'
+			SET @col = 'GroupID'
+		IF @col = 'CustomerID'
+			SET @col = 'MemberID'
+		IF @col = 'TargetMemberID'
+			SET @col = 'MemberID'
+		IF @col = 'ToMemberID'
+			SET @col = 'MemberID'
+		IF @col = 'FromMemberID'
+			SET @col = 'MemberID'
+		
+		/*
+			If this function is being called for the ##MembersToDelete table, then ignore columns that
+			do not map to GroupID or MemberID.
+		*/	
+		IF @Table2IsMEMBERSTODELETE=1
+		BEGIN
+			IF @col = 'MemberID'
+			BEGIN
+				SET @clause1 = CHAR(@char-1)+ '.' + LEFT(@CommaSeparatedList, @i-1) + '='+CHAR(@char)+'.' + @col
+			END
+			IF @col = 'GroupID'
+			BEGIN
+				SET @clause2 = ' AND ' + CHAR(@char-1)+ '.' + LEFT(@CommaSeparatedList, @i-1) + '='+CHAR(@char)+'.' + @col
+			END
+		END
+		ELSE
+		BEGIN
+			SET @rtnvalue += CHAR(@char-1)+ '.' + LEFT(@CommaSeparatedList, @i-1) + '='+CHAR(@char)+'.' + @col + ' AND '
+		END
+
+		SET @CommaSeparatedList = LTRIM(RTRIM(SUBSTRING(@CommaSeparatedList, @i+1, 1000)))
+		SET @i = 1
+	END
+END
+SET @col = @CommaSeparatedList
+IF @col = 'CallingSystemID'
+	SET @col = 'GroupID'
+IF @col = 'SiteID'
+	SET @col = 'GroupID'
+IF @col = 'DomainID'
+	SET @col = 'GroupID'
+IF @col = 'CustomerID'
+	SET @col = 'MemberID'
+IF @col = 'TargetMemberID'
+	SET @col = 'MemberID'
+IF @col = 'ToMemberID'
+	SET @col = 'MemberID'
+IF @col = 'FromMemberID'
+	SET @col = 'MemberID'
+	
+IF @Table2IsMEMBERSTODELETE=1
+BEGIN
+	IF @col = 'MemberID'
+	BEGIN
+		SET @clause1 = CHAR(@char-1) + '.' + @CommaSeparatedList + '=' + CHAR(@char) + '.' + @col
+	END
+	IF @col = 'GroupID'
+	BEGIN
+		SET @clause2 = ' AND ' + CHAR(@char-1) + '.' + @CommaSeparatedList + '=' + CHAR(@char) + '.' + @col
+	END
+	
+	SET @rtnvalue = COALESCE(@clause1, '') + COALESCE(@clause2, '')
+	
+	IF CHARINDEX('GroupID', @rtnvalue, 1) = 0
+	BEGIN
+		SET @rtnvalue = REPLACE(@rtnvalue, 'INNER JOIN', '')
+		SET @rtnvalue += ' AND ' + CHAR(@char) + '.MultiCommunity=0'
+	END
+END
+ELSE
+BEGIN
+	SET @rtnvalue += CHAR(@char-1) + '.' + @CommaSeparatedList + '=' + CHAR(@char) + '.' + @col
+END
+
+RETURN @rtnvalue
+END

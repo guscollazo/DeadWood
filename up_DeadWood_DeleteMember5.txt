@@ -1,0 +1,758 @@
+/*
+1. Specify the MemberID/CommunityID to be deleted.
+2. Specify the operation to perform:
+
+   @Operation='Log Photos'		  --- will log the photos for the member/community and delete nothing
+   @Operation='Delete Photos'     --- will delete the photos for the member/community and log the file paths
+   @Operation='Delete Everything' --- will delete everything for the member/community and log the photo file paths
+
+3. @DeleteTop controls how many records are deleted at a time.
+4. @Silent helps with debugging by printing debug statements.
+
+As DELETE statements are processed, check SQLCmdErrorLog for errors.
+
+When records are deleted from mnMember#.MemberPhoto, the filenames are written to DeadWoodDeletionOutput.
+
+Sample Call:
+	up_DeadWood_DeleteMember6
+		@MemberID=118843356
+	,	@CommunityID=3
+	,	@Operation='Log Photos'
+	,	@DeleteTop='1000'
+	,	@Silent=0
+*/
+CREATE PROCEDURE dbo.up_DeadWood_DeleteMember5
+	@MemberID								int
+,	@CommunityID							int
+,	@Operation								varchar(20) = ''
+
+,	@DeleteTop								varchar(10) = '1'
+,	@Silent									bit = 1
+AS
+SET NOCOUNT ON
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+
+DECLARE
+    @crlf               		NCHAR(2) = ''
+,   @SQLCmd             		NVARCHAR(MAX) = ''
+,   @ErrorMsg           		NVARCHAR(2048) = ''
+,   @ProcName           		VARCHAR(50) = ''
+,	@cnt						INT
+,	@cnt2						INT
+,   @Max	          			INT
+,	@DatabaseName				VARCHAR(max) = ''
+,	@TableName					VARCHAR(max) = ''
+,	@now						VARCHAR(25) = ''
+,	@stars						VARCHAR(130) = ''
+,	@mmod						TINYINT
+,	@Partition					VARCHAR(2)
+,	@StartDate					DATETIME
+,	@EndDate					DATETIME
+,	@TimeDiff					INT
+,	@ID							INT
+,	@MultiCommunity				BIT		--0 if we are deleting every community for the member. 1 if some communities are not being deleted.
+,	@sMemberID					VARCHAR(20)
+
+SELECT
+    @crlf = CHAR(13) + CHAR(10)
+,   @ProcName = OBJECT_NAME(@@PROCID)
+,	@Partition = CONVERT(VARCHAR, ((@MemberID % 24) + 1))
+,	@stars = REPLICATE('*', 100)
+,	@sMemberID = CONVERT(VARCHAR, @MemberID)
+
+IF @Operation <> 'Log Photos' AND @Operation <> 'Delete Photos' AND @Operation <> 'Delete Everything' OR @Operation IS NULL
+BEGIN
+	SELECT 'Please specify one of the following operations:'
+	SELECT 'Log Photos'
+	SELECT 'Delete Photos'
+	SELECT 'Delete Everything'
+
+	RETURN
+END
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_DeleteMember - start]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+CREATE TABLE #SecondChance (
+	SQLCmd							VARCHAR(MAX)
+)
+
+CREATE TABLE #Results (
+	Cnt								INT
+)
+
+CREATE TABLE #SQLCmds (
+	ID	            			INT IDENTITY
+,   SQLCmd        				NVARCHAR(MAX) NOT NULL
+,	DeletionOrderID				INT
+)
+	
+CREATE TABLE #DeadWoodMember (
+	MemberID INT,
+	GroupID INT,
+	mmod INT,
+	MultiCommunity INT
+)
+
+--CREATE INDEX IX_DeadWoodMember_1 ON #DeadWoodMember (MemberID)
+--CREATE INDEX IX_DeadWoodMember_2 ON #DeadWoodMember (MemberID, GroupID)
+--CREATE INDEX IX_DeadWoodMember_3 ON #DeadWoodMember (MemberID, MultiCommunity)
+	
+CREATE TABLE #Brand (
+	BrandID		       			int
+,   BrandName					varchar(100)
+,	SiteID						int
+,	CommunityID					int
+)
+
+CREATE TABLE #DeadWoodDELETEStatements (
+	ID INT IDENTITY(1,1) NOT NULL,
+	SQLCmd VARCHAR(8000) NOT NULL,
+	DatabaseTableName VARCHAR(1000) NULL,
+	FileOnRight BIT,
+	FileRootOnRight BIT,
+	DatabaseTableName_like_mnFile BIT,
+	DatabaseTableName_like_mnSearchStore BIT,
+	OrderNum SMALLINT
+)
+
+CREATE TABLE #DeadWoodDELETEStatements_tmp (
+	ID INT,
+	SQLCmd VARCHAR(8000),
+	DatabaseTableName VARCHAR(1000),
+	FileOnRight BIT,
+	FileRootOnRight BIT,
+	DatabaseTableName_like_mnFile BIT,
+	DatabaseTableName_like_mnSearchStore BIT,
+	OrderNum SMALLINT
+)
+
+
+
+
+
+
+
+/*
+	Get the brands into #Brand that we will be deleting for this member.
+*/
+SET @SQLCmd = 'INSERT INTO #Brand (BrandID, BrandName, SiteID, CommunityID) '
+SET @SQLCmd += 'SELECT b.BrandID, b.Uri, s.SiteID, s.CommunityID FROM mnSystem.dbo.Brand b WITH (NOLOCK) '
+SET @SQLCmd += 'INNER JOIN mnSystem.dbo.[Site] s ON b.SiteID = s.SiteID '
+SET @SQLCmd += 'INNER JOIN mnSystem.dbo.Community c WITH (NOLOCK) ON c.CommunityID = s.CommunityID '
+SET @SQLCmd += 'WHERE c.CommunityID = ' + CONVERT(VARCHAR, @CommunityID)
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [%s]', 10, 1, @stars, @now, @SQLCmd) WITH NOWAIT
+END
+
+EXEC (@SQLCmd)
+
+
+
+
+
+IF NOT EXISTS (SELECT 1 FROM #Brand)
+BEGIN
+	SELECT 'No brands were specified.'
+	RETURN
+END
+ELSE
+BEGIN
+	SELECT @cnt = COUNT(1) FROM dbo.BrandGroup (NOLOCK)
+	IF @cnt = 0
+	BEGIN
+		INSERT INTO dbo.BrandGroup (BrandID, GroupID)
+		SELECT DISTINCT BrandID, BrandID FROM #Brand
+		UNION ALL
+		SELECT DISTINCT BrandID, SiteID FROM #Brand WITH (NOLOCK)
+		UNION ALL
+		SELECT DISTINCT BrandID, CommunityID FROM #Brand WITH (NOLOCK)
+		UNION ALL
+		SELECT DISTINCT 8383, BrandID FROM #Brand WITH (NOLOCK)
+		UNION ALL
+		SELECT DISTINCT 8383, SiteID FROM #Brand WITH (NOLOCK)
+		UNION ALL
+		SELECT DISTINCT 8383, CommunityID FROM #Brand WITH (NOLOCK)
+		
+		IF @Silent=0
+		BEGIN
+			SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+			RAISERROR ('%s %s [up_DeadWood_DeleteMember - INSERT INTO dbo.BrandGroup]', 10, 1, @stars, @now) WITH NOWAIT
+		END
+	END
+END
+
+
+
+
+
+SELECT @DatabaseName = PhysicalDatabaseName FROM mnsystem.dbo.fn_LPD_List('mnMember', @MemberID, 1)
+
+SET @SQLCmd = 'SELECT CONVERT(VARCHAR(20), MemberID), CONVERT(VARCHAR(10), GroupID), ((MemberID%24)+1)' + @crlf
+SET @SQLCmd += 'FROM [' + @DatabaseName + '].dbo.MemberGroup WITH (NOLOCK)' + @crlf
+SET @SQLCmd += 'WHERE MemberID = ' + @sMemberID + @crlf
+SET @SQLCmd += 'AND GroupID IN (' + @crlf
+
+SET @SQLCmd += 'SELECT BrandID AS GroupID' + @crlf
+SET @SQLCmd += 'FROM #Brand' + @crlf
+
+SET @SQLCmd += 'UNION' + @crlf
+
+SET @SQLCmd += 'SELECT SiteID AS GroupID' + @crlf
+SET @SQLCmd += 'FROM #Brand' + @crlf
+
+SET @SQLCmd += 'UNION' + @crlf
+
+SET @SQLCmd += 'SELECT CommunityID AS GroupID' + @crlf
+SET @SQLCmd += 'FROM #Brand)' + @crlf
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [%s]', 10, 1, @stars, @now, @SQLCmd) WITH NOWAIT
+END
+
+INSERT INTO #DeadWoodMember (MemberID, GroupID, mmod)
+EXEC (@SQLCmd)
+
+SELECT TOP 1 @mmod = mmod
+FROM #DeadWoodMember
+
+IF NOT EXISTS (SELECT 1 FROM #DeadWoodMember)
+BEGIN
+	SELECT 'Sorry, this member does not exist for this community.'
+	RETURN
+END
+
+IF @mmod IS NULL
+BEGIN
+	IF @Silent=0
+	BEGIN
+		SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+		RAISERROR ('%s %s [up_DeadWood_DeleteMember - ERROR: Unable to continue. @mmod IS NULL]', 10, 1, @stars, @now) WITH NOWAIT
+	END
+	
+	RETURN
+END
+
+
+
+
+
+/*
+	Determine if this user has communities outside of @CommunityID.
+*/
+SET @SQLCmd = 'SELECT COUNT(1) FROM [' + @DatabaseName + '].dbo.MemberGroup mg WITH (NOLOCK) ' + @crlf
+SET @SQLCmd+= 'WHERE mg.MemberID = ' + @sMemberID + @crlf
+SET @SQLCmd+= 'AND mg.GroupID <> 8383'
+SET @SQLCmd+= 'AND mg.GroupID NOT IN (SELECT GroupID FROM #DeadWoodMember)'
+
+INSERT INTO #Results (Cnt)
+EXEC (@SQLCmd)
+
+SELECT @cnt = Cnt FROM #Results
+
+IF @cnt = 0
+BEGIN
+	INSERT INTO #DeadWoodMember (MemberID, GroupID, mmod)
+	VALUES (@MemberID, 8383, @mmod)
+	
+	UPDATE #DeadWoodMember SET MultiCommunity = 0
+
+	SET @MultiCommunity = 0
+	
+	INSERT #Brand (BrandID, BrandName, SiteID, CommunityID)
+	VALUES (8383, '', 8383, 8383)
+END
+ELSE
+BEGIN
+	DELETE #DeadWoodMember WHERE GroupID = 8383
+
+	UPDATE #DeadWoodMember SET MultiCommunity = 1
+
+	SET @MultiCommunity = 1
+END
+
+IF NOT EXISTS (SELECT 1 FROM #DeadWoodMember)
+BEGIN
+	IF @Silent=0
+	BEGIN
+		SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+		RAISERROR ('%s %s [up_DeadWood_DeleteMember - ERROR: Nothing to delete]', 10, 1, @stars, @now) WITH NOWAIT
+	END
+	
+	RETURN
+END
+
+
+
+
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_DeleteMember - A]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+IF @MultiCommunity = 0
+BEGIN
+	INSERT INTO #DeadWoodDELETEStatements (SQLCmd, DatabaseTableName, FileOnRight, FileRootOnRight, DatabaseTableName_like_mnFile, DatabaseTableName_like_mnSearchStore, OrderNum)
+	SELECT
+		SQLCmd,
+		DatabaseTableName,
+		FileOnRight,
+		FileRootOnRight,
+		DatabaseTableName_like_mnFile,
+		0,
+		OrderNum
+	FROM dbo.DeadWoodDELETEStatements_NotMultiCommunity_HasTargetMemberID WITH (NOLOCK)
+	ORDER BY ID
+	
+	INSERT INTO #DeadWoodDELETEStatements_tmp (ID, SQLCmd, DatabaseTableName, FileOnRight, FileRootOnRight, DatabaseTableName_like_mnFile, DatabaseTableName_like_mnSearchStore, OrderNum)
+	SELECT
+		ID,
+		SQLCmd = REPLACE(SQLCmd, '@MP@', CONVERT(VARCHAR, @mmod)),	
+		DatabaseTableName = REPLACE(DatabaseTableName, '@MP@', CONVERT(VARCHAR, @mmod)),
+		FileOnRight,
+		FileRootOnRight,
+		DatabaseTableName_like_mnFile,
+		DatabaseTableName_like_mnSearchStore,
+		CASE
+		WHEN FileOnRight=1 AND DatabaseTableName_like_mnFile=1 THEN -1000
+		WHEN FileRootOnRight=1 AND DatabaseTableName_like_mnFile=1 THEN -1
+		ELSE 1
+		END
+	FROM dbo.DeadWoodDELETEStatements_NotMultiCommunity WITH (NOLOCK)
+	WHERE HasTargetMemberID = 0
+	AND (
+		HasYNMList = 0
+		OR HasMnList_dbo_mv_D_YNMList = 1
+	)
+	
+	INSERT INTO #DeadWoodDELETEStatements (SQLCmd, DatabaseTableName, FileOnRight, FileRootOnRight, DatabaseTableName_like_mnFile, DatabaseTableName_like_mnSearchStore, OrderNum)
+	SELECT SQLCmd, DatabaseTableName, FileOnRight, FileRootOnRight, DatabaseTableName_like_mnFile, DatabaseTableName_like_mnSearchStore, OrderNum
+	FROM #DeadWoodDELETEStatements_tmp
+	ORDER BY ID
+
+	INSERT INTO #DeadWoodDELETEStatements (SQLCmd, DatabaseTableName, FileOnRight, FileRootOnRight, DatabaseTableName_like_mnFile, DatabaseTableName_like_mnSearchStore, OrderNum)
+	SELECT
+		SQLCmd = REPLACE(SQLCmd, '@MP@', CONVERT(VARCHAR, @mmod)),	
+		DatabaseTableName = REPLACE(DatabaseTableName, '@MP@', CONVERT(VARCHAR, @mmod)),
+		FileOnRight,
+		FileRootOnRight,
+		DatabaseTableName_like_mnFile,
+		DatabaseTableName_like_mnSearchStore,
+		CASE
+		WHEN FileOnRight=1 AND DatabaseTableName_like_mnFile=1 THEN -1000
+		WHEN FileRootOnRight=1 AND DatabaseTableName_like_mnFile=1 THEN -1
+		ELSE 1
+		END
+	FROM dbo.DeadWoodDELETEStatements_NotMultiCommunity WITH (NOLOCK)
+	WHERE HasTargetMemberID = 0
+	AND HasMnList_dbo_mv_D_YNMList = 0
+	AND HasYNMList = 1
+	AND REPLACE(REPLACE(SUBSTRING(SQLCmd, 25, 12), ']', ''), ' ', '') IN (
+		SELECT 'D' + CONVERT(VARCHAR, dwm.GroupID) + 'YNMList' + CONVERT(VARCHAR, @MemberID % p.PropertyValue)
+		FROM mnSystem.dbo.Property p WITH (NOLOCK) JOIN #DeadWoodMember dwm ON REPLACE(p.[Owner], 'YNMDomainID', '') = CONVERT(VARCHAR, dwm.GroupID)
+		WHERE p.PropertyName = 'AffinityID'
+		AND ISNUMERIC(p.PropertyValue) = 1
+	)
+	ORDER BY ID
+END
+ELSE
+BEGIN
+	INSERT INTO #DeadWoodDELETEStatements (SQLCmd, DatabaseTableName, FileOnRight, FileRootOnRight, DatabaseTableName_like_mnFile, DatabaseTableName_like_mnSearchStore, OrderNum)
+	SELECT
+		SQLCmd,
+		DatabaseTableName,
+		FileOnRight,
+		FileRootOnRight,
+		DatabaseTableName_like_mnFile,
+		0,
+		OrderNum
+	FROM dbo.DeadWoodDELETEStatements_HasTargetMemberID WITH (NOLOCK)
+	ORDER BY ID
+
+	INSERT INTO #DeadWoodDELETEStatements_tmp (ID, SQLCmd, DatabaseTableName, FileOnRight, FileRootOnRight, DatabaseTableName_like_mnFile, DatabaseTableName_like_mnSearchStore, OrderNum)
+	SELECT
+		ID,
+		SQLCmd = REPLACE(SQLCmd, '@MP@', CONVERT(VARCHAR, @mmod)),	
+		DatabaseTableName = REPLACE(DatabaseTableName, '@MP@', CONVERT(VARCHAR, @mmod)),
+		FileOnRight,
+		FileRootOnRight,
+		DatabaseTableName_like_mnFile,
+		DatabaseTableName_like_mnSearchStore,
+		CASE
+		WHEN FileOnRight=1 AND DatabaseTableName_like_mnFile=1 THEN -1000
+		WHEN FileRootOnRight=1 AND DatabaseTableName_like_mnFile=1 THEN -1
+		ELSE 1
+		END
+	FROM dbo.DeadWoodDELETEStatements WITH (NOLOCK)
+	WHERE HasTargetMemberID = 0
+	AND (
+		HasYNMList = 0
+		OR HasMnList_dbo_mv_D_YNMList = 1
+	)
+	
+	INSERT INTO #DeadWoodDELETEStatements (SQLCmd, DatabaseTableName, FileOnRight, FileRootOnRight, DatabaseTableName_like_mnFile, DatabaseTableName_like_mnSearchStore, OrderNum)
+	SELECT SQLCmd, DatabaseTableName, FileOnRight, FileRootOnRight, DatabaseTableName_like_mnFile, DatabaseTableName_like_mnSearchStore, OrderNum
+	FROM #DeadWoodDELETEStatements_tmp
+	ORDER BY ID
+
+	INSERT INTO #DeadWoodDELETEStatements (SQLCmd, DatabaseTableName, FileOnRight, FileRootOnRight, DatabaseTableName_like_mnFile, DatabaseTableName_like_mnSearchStore, OrderNum)
+	SELECT
+		SQLCmd = REPLACE(SQLCmd, '@MP@', CONVERT(VARCHAR, @mmod)),	
+		DatabaseTableName = REPLACE(DatabaseTableName, '@MP@', CONVERT(VARCHAR, @mmod)),
+		FileOnRight,
+		FileRootOnRight,
+		DatabaseTableName_like_mnFile,
+		DatabaseTableName_like_mnSearchStore,
+		CASE
+		WHEN FileOnRight=1 AND DatabaseTableName_like_mnFile=1 THEN -1000
+		WHEN FileRootOnRight=1 AND DatabaseTableName_like_mnFile=1 THEN -1
+		ELSE 1
+		END
+	FROM dbo.DeadWoodDELETEStatements WITH (NOLOCK)
+	WHERE HasTargetMemberID = 0
+	AND HasMnList_dbo_mv_D_YNMList = 0
+	AND HasYNMList = 1
+	AND REPLACE(REPLACE(SUBSTRING(SQLCmd, 25, 12), ']', ''), ' ', '') IN (
+		SELECT 'D' + CONVERT(VARCHAR, dwm.GroupID) + 'YNMList' + CONVERT(VARCHAR, @MemberID % p.PropertyValue)
+		FROM mnSystem.dbo.Property p WITH (NOLOCK) JOIN #DeadWoodMember dwm ON REPLACE(p.[Owner], 'YNMDomainID', '') = CONVERT(VARCHAR, dwm.GroupID)
+		WHERE p.PropertyName = 'AffinityID'
+		AND ISNUMERIC(p.PropertyValue) = 1
+	)
+	ORDER BY ID
+END
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_DeleteMember - B]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+
+
+
+
+IF @Operation='Log Photos' OR @Operation='Delete Photos'
+BEGIN
+	DELETE #DeadWoodDELETEStatements
+	WHERE DatabaseTableName NOT LIKE '%MemberPhoto%'
+	OR DatabaseTableName LIKE '%AlteredMemberPhoto%'
+END
+
+IF @Operation='Log Photos'
+BEGIN
+	SELECT @cnt = COUNT(1) FROM #DeadWoodDELETEStatements
+	IF @cnt <> 1
+	BEGIN
+		SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+		RAISERROR ('%s %s [up_DeadWood_DeleteMember - Error: Unexpected Number Of Statements]', 10, 1, @stars, @now) WITH NOWAIT
+		
+		RETURN
+	END
+	
+	SELECT TOP 1 @SQLCmd = SQLCmd FROM #DeadWoodDELETEStatements
+	
+	SELECT @cnt = CHARINDEX('FileWebPath, ThumbFileWebPath', @SQLCmd, 1)
+	SELECT @cnt2= CHARINDEX('INTO dbo.DeadWoodDeletionOutput', @SQLCmd, 1)
+	
+	UPDATE #DeadWoodDELETEStatements
+	SET SQLCmd = 'INSERT INTO dbo.DeadWoodDeletionOutput (MemberID, ServerName, DBName, TableName, FileWebPath, ThumbFileWebPath) SELECT ' + @crlf +
+		@sMemberID + ', ' +
+		REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(SUBSTRING(@SQLCmd, 1, @cnt2-1), '@1@', ''), '@OUTPUT@', ''), 'deleted.', ''), ', FileWebPath', ', a.FileWebPath'), 
+			', ThumbFileWebPath', ', a.ThumbFileWebPath') + 
+		REPLACE(SUBSTRING(@SQLCmd, @cnt+30, 1000), '@2@', '')
+END
+
+
+
+
+
+/*
+	Loop to process the DELETE statements. Log any statements that fail to run.
+*/
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_DeleteMember - C]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+DECLARE cur CURSOR FOR
+SELECT SQLCmd, DatabaseTableName, (OrderNum * ID) AS ID2
+FROM #DeadWoodDELETEStatements
+WHERE (
+	DatabaseTableName_like_mnSearchStore=0
+	AND
+	DatabaseTableName IS NOT NULL
+) OR (
+	DatabaseTableName_like_mnSearchStore=1
+	AND
+	REPLACE(REPLACE(REPLACE(DatabaseTableName, 'SearchStore', ''), '[mn].[dbo].[', ''), ']', '') = CONVERT(VARCHAR, (@MemberID % 157))
+)
+ORDER BY ID2
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_DeleteMember - D]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+OPEN cur
+SELECT @Max = @@CURSOR_ROWS
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_DeleteMember - %i DELETE statements]', 10, 1, @stars, @now, @Max) WITH NOWAIT		--everything up until this point takes 1 second to run
+END
+
+SET @cnt = 1
+
+FETCH NEXT FROM cur INTO @SQLCmd, @TableName, @ID
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+	SET @SQLCmd = REPLACE(@SQLCmd, '@DeleteTop', @DeleteTop)
+
+	IF CHARINDEX('MemberTextApprovalHistory', @SQLCmd, 1) > 0
+	BEGIN
+		SET @SQLCmd = REPLACE(@SQLCmd, 'GroupID', 'CommunityID')
+	END
+	
+	IF CHARINDEX('@MemberID', @SQLCmd, 1) > 0
+	BEGIN
+		SET @SQLCmd = REPLACE(@SQLCmd, '@MemberID', @sMemberID)
+	END
+
+	IF @Silent=0
+	BEGIN
+		RAISERROR ('%s %s %s (%i)', 10, 1, @stars, @SQLCmd, @stars, @cnt) WITH NOWAIT
+	END
+	BEGIN TRY
+		SET @StartDate = GetDate()
+		EXEC (@SQLCmd)	
+		SET @EndDate = GetDate()
+		
+		IF @Silent=0
+		BEGIN
+			IF @TableName NOT IN (
+				'[epOrder].[dbo].[Order]',
+				'[mnAdmin].[dbo].[AdminActionLog]',
+				'[mnAdmin].[dbo].[Member]',
+				'[mnLogon].[dbo].[MemberGroup]',
+				'[mnLogon].[dbo].[MemberLastLogon]',
+				'[mnPremiumServices].[dbo].[Answer]',
+				'[mnPremiumServices].[dbo].[MemberLikeObject]',
+				'[mnSystem].[dbo].[SiteArticle]',
+				'[mnMailLog].[dbo].[MailLog]',
+				'[epOrder].[dbo].[CustomerPaymentProfile]',
+				'[mnMember1].[dbo].[List]',
+				'[mnMember2].[dbo].[List]',
+				'[mnMember3].[dbo].[List]',
+				'[mnMember4].[dbo].[List]',
+				'[mnMember5].[dbo].[List]',
+				'[mnMember6].[dbo].[List]',
+				'[mnMember7].[dbo].[List]',
+				'[mnMember8].[dbo].[List]',
+				'[mnMember9].[dbo].[List]',
+				'[mnMember10].[dbo].[List]',
+				'[mnMember11].[dbo].[List]',
+				'[mnMember12].[dbo].[List]',
+				'[mnMember13].[dbo].[List]',
+				'[mnMember14].[dbo].[List]',
+				'[mnMember15].[dbo].[List]',
+				'[mnMember16].[dbo].[List]',
+				'[mnMember17].[dbo].[List]',
+				'[mnMember18].[dbo].[List]',
+				'[mnMember19].[dbo].[List]',
+				'[mnMember20].[dbo].[List]',
+				'[mnMember21].[dbo].[List]',
+				'[mnMember22].[dbo].[List]',
+				'[mnMember23].[dbo].[List]',
+				'[mnMember24].[dbo].[List]',
+				
+				'[mnMember1].[dbo].[MemberAttributeText]',
+				'[mnMember2].[dbo].[MemberAttributeText]',
+				'[mnMember3].[dbo].[MemberAttributeText]',
+				'[mnMember4].[dbo].[MemberAttributeText]',
+				'[mnMember5].[dbo].[MemberAttributeText]',
+				'[mnMember6].[dbo].[MemberAttributeText]',
+				'[mnMember7].[dbo].[MemberAttributeText]',
+				'[mnMember8].[dbo].[MemberAttributeText]',
+				'[mnMember9].[dbo].[MemberAttributeText]',
+				'[mnMember10].[dbo].[MemberAttributeText]',
+				'[mnMember11].[dbo].[MemberAttributeText]',
+				'[mnMember12].[dbo].[MemberAttributeText]',
+				'[mnMember13].[dbo].[MemberAttributeText]',
+				'[mnMember14].[dbo].[MemberAttributeText]',
+				'[mnMember15].[dbo].[MemberAttributeText]',
+				'[mnMember16].[dbo].[MemberAttributeText]',
+				'[mnMember17].[dbo].[MemberAttributeText]',
+				'[mnMember18].[dbo].[MemberAttributeText]',
+				'[mnMember19].[dbo].[MemberAttributeText]',
+				'[mnMember20].[dbo].[MemberAttributeText]',
+				'[mnMember21].[dbo].[MemberAttributeText]',
+				'[mnMember22].[dbo].[MemberAttributeText]',
+				'[mnMember23].[dbo].[MemberAttributeText]',
+				'[mnMember24].[dbo].[MemberAttributeText]',
+				
+				'[mnMember1].[dbo].[MemberPhoto]',
+				'[mnMember2].[dbo].[MemberPhoto]',
+				'[mnMember3].[dbo].[MemberPhoto]',
+				'[mnMember4].[dbo].[MemberPhoto]',
+				'[mnMember5].[dbo].[MemberPhoto]',
+				'[mnMember6].[dbo].[MemberPhoto]',
+				'[mnMember7].[dbo].[MemberPhoto]',
+				'[mnMember8].[dbo].[MemberPhoto]',
+				'[mnMember9].[dbo].[MemberPhoto]',
+				'[mnMember10].[dbo].[MemberPhoto]',
+				'[mnMember11].[dbo].[MemberPhoto]',
+				'[mnMember12].[dbo].[MemberPhoto]',
+				'[mnMember13].[dbo].[MemberPhoto]',
+				'[mnMember14].[dbo].[MemberPhoto]',
+				'[mnMember15].[dbo].[MemberPhoto]',
+				'[mnMember16].[dbo].[MemberPhoto]',
+				'[mnMember17].[dbo].[MemberPhoto]',
+				'[mnMember18].[dbo].[MemberPhoto]',
+				'[mnMember19].[dbo].[MemberPhoto]',
+				'[mnMember20].[dbo].[MemberPhoto]',
+				'[mnMember21].[dbo].[MemberPhoto]',
+				'[mnMember22].[dbo].[MemberPhoto]',
+				'[mnMember23].[dbo].[MemberPhoto]',
+				'[mnMember24].[dbo].[MemberPhoto]',
+				
+				'[mnIMail11].[dbo].[MessageList]',
+				'[mnIMail12].[dbo].[MessageList]',
+				'[mnIMail13].[dbo].[MessageList]',
+				'[mnIMail14].[dbo].[MessageList]',
+				'[mnIMail15].[dbo].[MessageList]',
+				'[mnIMail16].[dbo].[MessageList]',
+				'[mnIMail17].[dbo].[MessageList]',
+				'[mnIMail18].[dbo].[MessageList]',
+				'[mnIMail19].[dbo].[MessageList]',
+				'[mnIMail110].[dbo].[MessageList]',
+				'[mnIMail111].[dbo].[MessageList]',
+				'[mnIMail112].[dbo].[MessageList]',
+				'[mnIMail113].[dbo].[MessageList]',
+				'[mnIMail114].[dbo].[MessageList]',
+				'[mnIMail115].[dbo].[MessageList]',
+				'[mnIMail116].[dbo].[MessageList]',
+				'[mnIMail117].[dbo].[MessageList]',
+				'[mnIMail118].[dbo].[MessageList]',
+				'[mnIMail119].[dbo].[MessageList]',
+				'[mnIMail120].[dbo].[MessageList]',
+				'[mnIMail121].[dbo].[MessageList]',
+				'[mnIMail122].[dbo].[MessageList]',
+				'[mnIMail123].[dbo].[MessageList]',
+				'[mnIMail124].[dbo].[MessageList]'
+			)
+			BEGIN
+				SET @TimeDiff = DATEDIFF(MILLISECOND, @StartDate, @EndDate)
+				IF @TimeDiff > 50
+				BEGIN
+					RAISERROR ('%s Duration For Above Command: %i ms for [%s]', 10, 1, @stars, @TimeDiff, @TableName) WITH NOWAIT
+				END
+			END
+		END
+	END TRY
+	BEGIN CATCH
+		SET @ErrorMsg = ERROR_MESSAGE()
+		
+		IF @ErrorMsg LIKE '%conflicted with the REFERENCE constraint%'
+		BEGIN
+			INSERT INTO #SecondChance (SQLCmd) VALUES (@SQLCmd)
+		END
+		ELSE
+		BEGIN
+			IF @ErrorMsg <> 'Invalid column name ''MemberID''.' AND @ErrorMsg NOT LIKE '%is ambiguous%'
+			BEGIN
+				INSERT INTO dbo.SQLCmdErrorLog (MemberID, ProcedureName, SQLCmd, ErrorMessage)
+				VALUES (@MemberID, @ProcName, @SQLCmd, @ErrorMsg)
+			END
+		END
+	END CATCH
+	
+	SET @cnt += 1
+
+	FETCH NEXT FROM cur INTO @SQLCmd, @TableName, @ID
+END
+
+CLOSE cur
+DEALLOCATE cur
+
+/*
+	Rerun any commands that failed due to foreign key constraints.
+*/
+DECLARE cur2 CURSOR FOR
+SELECT SQLCmd
+FROM #SecondChance
+
+OPEN cur2
+SELECT @Max = @@CURSOR_ROWS
+
+IF @Silent=0 AND @Max > 0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_DeleteMember - %i DELETE statements (second chance)]', 10, 1, @stars, @now, @Max) WITH NOWAIT
+END
+
+SET @cnt = 1
+
+FETCH NEXT FROM cur2 INTO @SQLCmd
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+	IF @Silent=0
+	BEGIN
+		RAISERROR ('%s %s %s (%i)', 10, 1, @stars, @SQLCmd, @stars, @cnt) WITH NOWAIT
+	END
+	BEGIN TRY
+		SET @StartDate = GetDate()
+		EXEC (@SQLCmd)
+		SET @EndDate = GetDate()
+		
+		IF @Silent=0
+		BEGIN
+			SET @TimeDiff = DATEDIFF(MILLISECOND, @StartDate, @EndDate)
+			IF @TimeDiff > 60
+			BEGIN
+				RAISERROR ('%s Duration For Above Command: %i ms', 10, 1, @stars, @TimeDiff) WITH NOWAIT
+			END
+		END
+	END TRY
+	BEGIN CATCH
+		SET @ErrorMsg = ERROR_MESSAGE()
+		
+		INSERT INTO dbo.SQLCmdErrorLog (MemberID, ProcedureName, SQLCmd, ErrorMessage)
+		VALUES (@MemberID, @ProcName, @SQLCmd, @ErrorMsg)
+	END CATCH
+	
+	SET @cnt += 1
+
+	FETCH NEXT FROM cur2 INTO @SQLCmd
+END
+
+CLOSE cur2
+DEALLOCATE cur2
+
+IF @Operation='Log Photos'
+BEGIN
+	SELECT DISTINCT MemberID, DBName, TableName, FileWebPath, ThumbFileWebPath
+	FROM DeadWoodDeletionOutput
+	WHERE MemberID = @MemberID
+END
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_DeleteMember - end]', 10, 1, @stars, @now) WITH NOWAIT
+END

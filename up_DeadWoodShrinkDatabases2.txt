@@ -1,0 +1,222 @@
+ALTER PROCEDURE dbo.up_DeadWoodShrinkDatabases2
+	@mod TINYINT = 0,	--0, 1, ..., (x-1)
+	@maxMod TINYINT = 1	--x
+AS
+SET NOCOUNT ON
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+
+DECLARE @i INT, @max INT, @SizeMB INT, @UsedMB INT, @TargetFreeMB INT, @ShrinkIncrementMB INT, @LastValue INT
+DECLARE @DatabaseName SYSNAME, @DBFileName SYSNAME, @SQL VARCHAR(8000), @LogFileToShrink VARCHAR(MAX)
+DECLARE @Subject VARCHAR(500)
+DECLARE @StartDate DATETIME
+DECLARE @ID INT
+DECLARE @DatabaseFiles TABLE (ID INT IDENTITY(1,1), [FileName] SYSNAME)
+DECLARE @DatabasesToShrink TABLE (ID INT IDENTITY(1,1), DatabaseName SYSNAME)
+IF OBJECT_ID('tempdb..#files') IS NOT NULL 
+    DROP TABLE #files
+CREATE TABLE #files (name VARCHAR(100))
+IF OBJECT_ID('tempdb..#results') IS NOT NULL 
+    DROP TABLE #results
+CREATE TABLE #results (result DECIMAL(18,2))
+
+-- Set Desired file free space in MB after shrink
+set @TargetFreeMB = 100              --############################################################
+
+-- Set Increment to shrink file by in MB
+set @ShrinkIncrementMB = 250         --############################################################
+
+--UPDATE dbo.DeadWoodDatabaseProcessing WITH (ROWLOCK)
+--SET ShrinkStatus = 'Shrinking'
+--OUTPUT deleted.ID, deleted.DatabaseName INTO @DatabasesToShrink (ID, DatabaseName)
+--WHERE ShrinkStatus = 'Ready'
+
+--IF NOT EXISTS (SELECT 1 FROM @DatabasesToShrink)
+--BEGIN
+--	RETURN
+--END
+
+--INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('epAccess')
+--INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('epAuthorization')
+--INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('epOrder')
+--INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('epPayment')
+--INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('epRenewal')
+--INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('epValidation')
+--INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnActivityRecording')
+--INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnAlert')
+--INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnAPI')
+--INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnContent')
+--SET @ID = 1
+--WHILE @ID < 25
+--BEGIN
+--	INSERT INTO @DatabasesToShrink (DatabaseName) SELECT 'mnFile' + CONVERT(VARCHAR, @ID)
+--	SET @ID += 1
+--END
+--INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnFileExchange')
+SET @ID = 1
+WHILE @ID < 25
+BEGIN
+	INSERT INTO @DatabasesToShrink (DatabaseName) SELECT 'mnImail' + CONVERT(VARCHAR, @ID)
+	SET @ID += 1
+END
+INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnKey1')
+INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnKey2')
+INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnKey3')
+SET @ID = 1
+WHILE @ID < 25
+BEGIN
+	INSERT INTO @DatabasesToShrink (DatabaseName) SELECT 'mnList' + CONVERT(VARCHAR, @ID)
+	SET @ID += 1
+END
+INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnLogon')
+INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnLookup')
+INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnMailLog')
+SET @ID = 1
+WHILE @ID < 25
+BEGIN
+	INSERT INTO @DatabasesToShrink (DatabaseName) SELECT 'mnMember' + CONVERT(VARCHAR, @ID)
+	SET @ID += 1
+END
+INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnMemberApproval')
+INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnPhotoStore')
+INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnPremiumServices')
+INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnRegion')
+INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnSearchStore')
+INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnSystem')
+INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnXmail')
+
+INSERT INTO @DatabasesToShrink (DatabaseName) VALUES ('mnAdmin')		--was taking a while, I'm moving this one to the end
+
+DECLARE cur1 CURSOR FORWARD_ONLY FOR
+SELECT ds.ID, '['+ ds.DatabaseName + ']'
+FROM @DatabasesToShrink ds
+WHERE (ID % @maxMod) = @mod
+ORDER BY ID
+
+OPEN cur1
+FETCH NEXT FROM cur1 INTO @ID, @DatabaseName
+WHILE @@FETCH_STATUS = 0
+BEGIN
+	SELECT @StartDate = GetDate()
+
+    set @sql = 'select name from ' + @DatabaseName + '.dbo.sysfiles'
+    
+    delete #files
+    
+    insert into #files (name)
+    exec (@sql)
+                    
+    DECLARE cur2 CURSOR FOR
+    select name from #files
+
+    OPEN cur2
+    FETCH NEXT FROM cur2 INTO @DBFileName
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+		/*
+			Get current file size in MB
+		*/
+		DELETE #results
+		SET @sql = 'SELECT size/128. FROM ' + @DatabaseName + '.dbo.sysfiles WHERE Name = ''' + @DBFileName + ''''
+		INSERT INTO #results (result)
+		EXEC (@sql)
+		SELECT TOP 1 @SizeMB = result FROM #results
+	    
+		/*
+			Get current space used in MB
+		*/
+		DELETE #results
+		SET @sql = 'SELECT fileproperty(''' + @DBFileName + ''', ''SpaceUsed'')/128.'
+		INSERT INTO #results (result)
+		EXEC (@sql)
+		SELECT TOP 1 @UsedMB = COALESCE(result, 0) FROM #results
+	    
+		RAISERROR ('@SizeMB [%i] > (@UsedMB [%i] + @TargetFreeMB [%i] + @ShrinkIncrementMB [%i])', 10, 1,@SizeMB, @UsedMB, @TargetFreeMB, @ShrinkIncrementMB) WITH NOWAIT
+	    
+		SET @LastValue = -1
+		WHILE  (@SizeMB > (@UsedMB + @TargetFreeMB + @ShrinkIncrementMB)) AND (@LastValue <> @SizeMB - @ShrinkIncrementMB)
+		BEGIN
+			SET @LastValue = @SizeMB - @ShrinkIncrementMB
+			SET @sql = 'use ' + @DatabaseName + '; dbcc shrinkfile (''' + @DBFileName + ''', ' + CONVERT(VARCHAR(20), @SizeMB - @ShrinkIncrementMB) + ')'
+	        
+			RAISERROR ('%s', 10, 1, @sql) WITH NOWAIT
+			EXEC (@sql)
+
+			/*
+				Get current file size in MB
+			*/
+			DELETE #results
+			SET @sql = 'SELECT size/128. FROM ' + @DatabaseName + '.dbo.sysfiles WHERE Name = ''' + @DBFileName + ''''
+			INSERT INTO #results (result)
+			EXEC (@sql)
+			SELECT TOP 1 @SizeMB = result FROM #results
+
+			/*
+				Get current space used in MB
+			*/
+			DELETE #results
+			SET @sql = 'SELECT fileproperty(''' + @DBFileName + ''', ''SpaceUsed'')/128.'
+			INSERT INTO #results (result)
+			EXEC (@sql)
+			SELECT TOP 1 @UsedMB = COALESCE(result, 0) FROM #results
+		END
+		FETCH NEXT FROM cur2 INTO @DBFileName
+    END
+
+    CLOSE cur2
+    DEALLOCATE cur2
+	
+	/*
+		Shrink the log files for the database.
+	*/
+	SELECT @SQL = 'SELECT [Name] FROM ' + @DatabaseName + '.dbo.SysFiles WHERE RIGHT([FileName], 4) = ''.LDF'''
+
+	DELETE @DatabaseFiles
+
+	INSERT INTO @DatabaseFiles ([FileName])
+	EXEC (@SQL)
+
+	DECLARE P_Cursor CURSOR FORWARD_ONLY FOR 
+	SELECT DISTINCT [FileName] FROM @DatabaseFiles
+	
+	OPEN P_Cursor
+	FETCH NEXT FROM P_Cursor
+	INTO @LogFileToShrink
+
+	WHILE @@FETCH_STATUS = 0
+	BEGIN
+		SET @SQL = 'USE ' + @DatabaseName + '; DBCC SHRINKFILE ( ' + @LogFileToShrink + ')' 
+		EXEC (@SQL)
+		FETCH NEXT FROM P_Cursor INTO @LogFileToShrink
+	END
+	
+	CLOSE P_Cursor
+	DEALLOCATE P_Cursor	
+	
+	/*
+		Note the database as ready for Prime2Stg.
+	*/
+	--UPDATE dbo.DeadWoodDatabaseProcessing WITH (ROWLOCK)
+	--SET ShrinkStatus = 'Shrunk', TransferStatus = 'Ready'
+	--WHERE ID = @ID
+	
+	--EXEC up_DeadWoodEnableDisableJobs @NumJobs=1, @EnableBit=1, @JobType='Push'
+	
+	INSERT INTO dbo.DeadWoodTiming ([Message], StartDate, EndDate)
+	SELECT 'Shrinking [' + @DatabaseName + ']', @StartDate, GetDate()
+	
+	SET @Subject = 'Database Shrunk: ' + @DatabaseName
+	
+	EXEC msdb.dbo.sp_send_dbmail
+		@profile_name='admin',
+		@recipients='gcollazo@spark.net',
+		@subject=@Subject,
+		@body=@Subject
+
+	FETCH NEXT FROM cur1 INTO @ID, @DatabaseName
+END
+
+CLOSE cur1
+DEALLOCATE cur1
+
+EXEC up_EmailDatabaseSizes

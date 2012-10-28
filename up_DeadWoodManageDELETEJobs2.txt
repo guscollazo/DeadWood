@@ -1,0 +1,99 @@
+/*
+	This procedure will manage the DELETE jobs for DeadWood.
+	
+	For the OPENROWSET command to work... 
+	sp_configure 'show advanced options', 1
+	RECONFIGURE
+	sp_configure 'Ad Hoc Distributed Queries', 1
+	RECONFIGURE
+*/
+ALTER PROCEDURE dbo.up_DeadWoodManageDELETEJobs2
+	@NumDesiredDELETEJobs INT = 450,
+	@IDRange INT = 1000
+AS
+SET NOCOUNT ON
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+
+DECLARE @MinID INT, @MaxID INT, @OrigMinID INT
+DECLARE @SQL VARCHAR(MAX), @JobName VARCHAR(200)
+DECLARE @NumDELETEJobsRunning INT, @NumJobsToStart INT
+
+RAISERROR ('up_DeadWoodManageDELETEJobs starting', 10, 1) WITH NOWAIT
+
+/*
+	Find out how many DELETE jobs are already running.
+*/
+SELECT *
+INTO #JobInfo
+FROM OPENROWSET(
+	'sqloledb', 
+	'server=(local);trusted_connection=yes',
+	'set fmtonly off;exec msdb.dbo.sp_help_job')
+
+SELECT @NumDELETEJobsRunning = COUNT(1) FROM #JobInfo WHERE name LIKE 'DW Deletes %' AND current_execution_status = 1
+
+RAISERROR ('The number of DELETE jobs running is %i.', 10, 1, @NumDELETEJobsRunning) WITH NOWAIT
+
+/*
+	If we are running more jobs than desired, stop the "extra" jobs.
+*/
+IF @NumDELETEJobsRunning >= @NumDesiredDELETEJobs
+BEGIN
+	RETURN
+END
+
+IF @NumDELETEJobsRunning < @NumDesiredDELETEJobs
+BEGIN
+	SET @NumJobsToStart = @NumDesiredDELETEJobs - @NumDELETEJobsRunning
+	
+	RAISERROR ('The number of DELETE jobs to start is %i.', 10, 1, @NumJobsToStart) WITH NOWAIT
+	
+	--SELECT @MinID = MIN(MembersToDeadwoodID) FROM dbo.MembersToDeadwood (NOLOCK) WHERE Processing IS NULL AND MembersToDeadwoodID > 547684
+	SELECT @MinID = MinMembersToDeadwoodID FROM dbo.MembersToDeadwood_IDs (NOLOCK)
+	IF @MinID IS NOT NULL
+	BEGIN
+		SET @OrigMinID = @MinID
+		
+		WHILE @NumJobsToStart > 0
+		BEGIN
+			SELECT TOP 1 @JobName = name
+			FROM #JobInfo
+			WHERE name LIKE 'DW Deletes %'
+			AND current_execution_status = 4
+			ORDER BY name
+			
+			SET @MaxID = @MinID+(@IDRange-1)
+
+			RAISERROR ('Job [%s] started for %i to %i', 10, 1, @JobName, @MinID, @MaxID) WITH NOWAIT
+		
+			SET @SQL = 'EXEC msdb.dbo.sp_update_jobstep @job_name=''' + @JobName + 
+				''', @step_id=1, @command=''EXEC up_DeadWoodDeleteMember ''''' + CONVERT(VARCHAR, @MinID) + ''''', ''''' + CONVERT(VARCHAR, @MaxID) + ''''' '''
+			EXEC (@SQL)
+			EXECUTE msdb.dbo.sp_start_job @job_name=@JobName
+			
+			--The updated job is taken out of the pool of inactive jobs.
+			DELETE #JobInfo WHERE name = @JobName
+			
+			--UPDATE dbo.MembersToDeadwood SET Processing = 1 WHERE MembersToDeadwoodID BETWEEN @MinID AND @MaxID
+			
+			SET @MinID += @IDRange
+			SET @NumJobsToStart -= 1
+		END
+	END
+END
+
+UPDATE dbo.MembersToDeadwood_IDs
+SET MinMembersToDeadwoodID = @MinID
+
+--RAISERROR ('Setting "Processing" for %i to %i', 10, 1, @OrigMinID, @MaxID) WITH NOWAIT
+--WHILE @OrigMinID < @MaxID
+--BEGIN
+--	IF @OrigMinID+50 > @MaxID
+--		UPDATE dbo.MembersToDeadwood SET Processing = 1 WHERE MembersToDeadwoodID BETWEEN @OrigMinID AND @MaxID
+--	ELSE
+--		UPDATE dbo.MembersToDeadwood SET Processing = 1 WHERE MembersToDeadwoodID BETWEEN @OrigMinID AND (@OrigMinID+50)
+		
+--	SET @OrigMinID += 50
+--END
+
+RAISERROR ('up_DeadWoodManageDELETEJobs done', 10, 1) WITH NOWAIT

@@ -1,0 +1,184 @@
+USE [mnDBA]
+GO
+/****** Object:  StoredProcedure [dbo].[usp_sp1_processes_recursion_MemberOnly]    Script Date: 10/26/2011 17:49:24 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+--GC: Added @dbname parameter to limit table searching within databases for now.
+ALTER PROCEDURE [dbo].[usp_sp1_processes_recursion_MemberOnly] (
+	@str1 varchar(max),
+	@lvl int,
+	@dbname sysname,
+	@tablename sysname,
+	@pk varchar(max),
+	@char int,
+	@Silent bit = 0
+	/*,@finalstring varchar(max) output,@tablenameout sysname output*/)
+as
+set nocount on 
+create table #items (id int identity (1,1) , dbname sysname,schemaname sysname,tablename sysname,searchcol varchar(max),lvl int)
+--set @finalstring=''
+--GC: @dbname was moved up as a parameter.
+--DECLARE @dbname sysname,@schemaname sysname,@tablename2 sysname,@pk2 varchar(max),@charletter varchar(1),@newstr1 varchar(max),@finalfinal varchar(max),@i int,@rc int,@finalstring varchar(max),@ONclause varchar(max),@cnt int
+DECLARE @schemaname sysname,@tablename2 sysname,@pk2 varchar(max),@charletter varchar(1),@newstr1 varchar(max),@finalfinal varchar(max),@i int,@rc int,@finalstring varchar(max),@ONclause varchar(max),@cnt int,@alternate_pk varchar(max)
+
+IF @Silent=0
+BEGIN
+	RAISERROR ('------1 %s', 10, 1, @str1) WITH NOWAIT
+END
+
+select @char=@char+1
+set @charletter=CHAR(98+@char)
+--GC: When pk is unavailable, use searchcol.
+if (select COUNT(1)   from ##DeadWoodTables where pk_searchcol in (
+select searchcol from ##DeadWoodTables where   tablename=@tablename) and lvl<@lvl) =0		--lvl=@lvl-1
+begin
+	IF @Silent=0
+	BEGIN
+		RAISERROR ('------1a %s %s', 10, 1, @pk, @charletter) WITH NOWAIT
+	END
+
+	/*
+		GC: This code is run at the end of recursion. It should result in a proper join to the ##MembersToDelete table.
+			If it does not, then this is an invalid statement that does not need to be executed.
+	*/
+	SET @ONclause = [mnDBA].[dbo].[fn_CommaSeparatedListTOJoinList6_char] (@pk,ascii(@charletter),1)
+	
+	IF @Silent=0
+	BEGIN
+		RAISERROR ('------2 %s', 10, 1, @ONclause) WITH NOWAIT
+	END
+	
+	IF (RIGHT(@ONclause, 22) = 'AND ' + @charletter + '.MultiCommunity=0') AND (RIGHT(@ONclause, 25) <> 'ID AND ' + @charletter + '.MultiCommunity=0')
+	BEGIN
+		IF @Silent=0
+		BEGIN
+			RAISERROR ('------222222', 10, 1) WITH NOWAIT
+		END
+		
+		SET @ONclause = @charletter + '.MemberID=' + char(ascii(@charletter)-1) + '.MemberID ' + LTRIM(@ONclause)
+		SET @ONclause = REPLACE(@ONclause, ' AND ' + @charletter + '.MultiCommunity=0', '')
+	END
+	
+	IF @Silent=0
+	BEGIN
+		RAISERROR ('------3 %s', 10, 1, @ONclause) WITH NOWAIT
+	END
+
+	IF RIGHT(@ONclause, 9) = '.MemberID' OR RIGHT(@ONclause, 8) = '.GroupID' OR RIGHT(@ONclause, 25) = 'ID AND ' + @charletter + '.MultiCommunity=0'
+	BEGIN
+		IF @Silent=0
+		BEGIN
+			RAISERROR ('------4', 10, 1) WITH NOWAIT
+		END
+		
+		set @finalstring= @str1 + '
+			join dbo.DeadWoodMembers# '+ char(ascii(@charletter)) +' (NOLOCK) on ' + @ONclause
+		
+		IF @finalstring IS NOT NULL
+		BEGIN
+			select @finalstring
+		END
+		
+		IF @Silent=0
+		BEGIN
+			RAISERROR ('------5 %s', 10, 1, @finalstring) WITH NOWAIT
+		END
+	END
+	
+	RETURN
+end
+else
+begin
+	IF @Silent=0
+	BEGIN
+		RAISERROR ('------111', 10, 1) WITH NOWAIT
+	END
+	
+	--GC: When pk is unavailable, use searchcol.
+	insert into #items
+	select dbname ,schemaname ,tablename ,searchcol,lvl   from ##DeadWoodTables where pk_searchcol in (
+		select searchcol from ##DeadWoodTables where  tablename=@tablename
+	) and lvl<@lvl		--) and lvl=@lvl-1
+	and CHARINDEX(dbname + '.' + schemaname + '.' + tablename, @str1, 1) = 0	--consider only tables not already joined
+	
+	select @rc=COUNT(1),@i=1 from #items
+	while @i <=@rc
+	begin
+		--GC: For now, table searching is limited to the database passed in to this procedure.
+		--select @dbname=dbname,@schemaname=schemaname,@tablename2=tablename,@pk2=searchcol,@lvl=lvl from #items where id=@i
+		select @schemaname=schemaname,@tablename2=tablename,@pk2=searchcol,@lvl=lvl from #items where id=@i
+		set @charletter=CHAR(98+@char)
+		if charindex('[',@dbname) = 0
+			select @dbname='['+@dbname+']'
+		if charindex('[',@schemaname) = 0					
+			select @schemaname='['+@schemaname+']'
+		if charindex('[',@tablename) = 0					
+			select @tablename='['+@tablename+']'
+		if charindex('[',@tablename2) = 0					
+			select @tablename2='['+@tablename2+']'
+
+		/*
+			GC:
+			In some instances, the code below would generate a JOIN with an invalid column. This code cancels such statements.
+		*/
+		IF EXISTS (
+			SELECT 1 
+			FROM dbo.AllTablesColumns
+			WHERE DatabaseName = REPLACE(REPLACE(@dbname, '[', ''), ']', '')
+			AND SchemaName = REPLACE(REPLACE(@schemaname, '[', ''), ']', '')
+			AND TableName = REPLACE(REPLACE(@tablename2, '[', ''), ']', '')
+			AND ColumnName = REPLACE(REPLACE(@pk, '[', ''), ']', ''))
+		BEGIN
+			SET @alternate_pk = NULL
+			
+			IF EXISTS (
+				SELECT 1
+				FROM dbo.DeadWoodTargetKeyException
+				WHERE DBName1 = @dbname
+				AND ExceptionAction = 'ALTER JOIN'
+			)
+			BEGIN
+				SELECT TOP 1 @alternate_pk = PrimaryKeys
+				FROM dbo.DeadWoodTargetKeyException
+				WHERE DBName1 = @dbname
+				AND SchemaName1 = @schemaname
+				AND TableName1 = @tablename
+				AND DBName2 = @dbname
+				AND SchemaName2 = @schemaname
+				AND TableName2 = @tablename2
+				AND ExceptionAction = 'ALTER JOIN'
+			END
+
+			SET @ONclause = [mnDBA].[dbo].[fn_CommaSeparatedListTOJoinList3_char] (COALESCE(@alternate_pk, @pk),COALESCE(@alternate_pk, @pk),ascii(@charletter))
+			
+			set @newstr1=@str1 + '
+				Join ' + @dbname + '.' + @schemaname + '.' + @tablename2 +' ' + CHAR(98+@char) +' on ' + @ONclause
+				-- + @charletter +'.[' + @pk + ']='+CHAR(98+@char-1)+'.[' + @pk +'] --' + CONVERT(varchar(100),@lvl)
+			select @finalstring= @finalstring + '
+			'
+			+ @newstr1
+			
+			select @lvl=@lvl-1
+	
+			EXECUTE  [mnDBA].[dbo].[usp_sp1_processes_recursion_MemberOnly] 
+			   @newstr1
+			  ,@lvl
+			  ,@dbname
+			  ,@tablename2
+			  ,@pk2
+			  ,@char
+			  ,@Silent
+				--,@finalstring OUTPUT
+				--,@tablenameout output
+			set @i=@i+1
+		END
+		ELSE
+		BEGIN
+			select @lvl=@lvl-1
+			--select NULL
+			set @i=@i+1
+		END
+	END
+end

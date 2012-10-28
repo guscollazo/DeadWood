@@ -1,0 +1,259 @@
+/*
+	This procedure will manage the "DW Administer DELETE Jobs" job.
+*/
+ALTER PROCEDURE dbo.up_DeadWoodManage_DWAdministerDELETEJobs_Job
+	@NumRowsToDelete INT = 50,
+	@MaxNumSecondsThreshold DECIMAL(18, 2) = 2,
+	@MinNumJobs INT = 1,
+	@MaxNumJobs INT = 500
+AS
+SET NOCOUNT ON
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+
+/*
+IF OBJECT_ID('tempdb..#JobInfo') IS NOT NULL 
+	DROP TABLE #JobInfo
+CREATE TABLE #JobInfo(
+	[job_id] [uniqueidentifier] NULL,
+	[originating_server] [nvarchar](128) NULL,
+	[name] [nvarchar](128) NULL,
+	[enabled] [tinyint] NULL,
+	[description] [nvarchar](512) NULL,
+	[start_step_id] [int] NULL,
+	[category] [nvarchar](128) NULL,
+	[owner] [nvarchar](128) NULL,
+	[notify_level_eventlog] [int] NULL,
+	[notify_level_email] [int] NULL,
+	[notify_level_netsend] [int] NULL,
+	[notify_level_page] [int] NULL,
+	[notify_email_operator] [nvarchar](128) NULL,
+	[notify_netsend_operator] [nvarchar](128) NULL,
+	[notify_page_operator] [nvarchar](128) NULL,
+	[delete_level] [int] NULL,
+	[date_created] [datetime] NULL,
+	[date_modified] [datetime] NULL,
+	[version_number] [int] NULL,
+	[last_run_date] [int] NOT NULL,
+	[last_run_time] [int] NOT NULL,
+	[last_run_outcome] [int] NOT NULL,
+	[next_run_date] [int] NOT NULL,
+	[next_run_time] [int] NOT NULL,
+	[next_run_schedule_id] [int] NOT NULL,
+	[current_execution_status] [int] NOT NULL,
+	[current_execution_step] [nvarchar](128) NULL,
+	[current_retry_attempt] [int] NOT NULL,
+	[has_step] [int] NULL,
+	[has_schedule] [int] NULL,
+	[has_target] [int] NULL,
+	[type] [int] NOT NULL
+)
+*/
+
+DECLARE @SQL VARCHAR(MAX), @Subject VARCHAR(1000)
+DECLARE @Date DATETIME
+DECLARE @NumDELETEJobsRunning INT, @RowCount INT, @i INT, @iAvg INT, @MaxNumMilliSecondsThreshold INT, @Duration INT
+DECLARE @Avg DECIMAL(18, 2)
+DECLARE @fNumberJobsLowered BIT
+
+SET @fNumberJobsLowered = 0
+SET @MaxNumMilliSecondsThreshold = @MaxNumSecondsThreshold * 1000
+
+RAISERROR ('up_DeadWoodManage_DWAdministerDELETEJobs_Job starting. @MaxNumMilliSecondsThreshold = %i', 10, 1, @MaxNumMilliSecondsThreshold) WITH NOWAIT
+
+/*
+	Find out how many DELETE jobs are already running.
+*/
+SELECT *
+INTO #JobInfo
+FROM OPENROWSET(
+	'sqloledb', 
+	'server=(local);trusted_connection=yes',
+	'set fmtonly off;exec msdb.dbo.sp_help_job')
+
+SELECT @NumDELETEJobsRunning = COUNT(1) FROM #JobInfo WHERE [Name] LIKE 'DW Deletes %' AND current_execution_status = 1
+
+RAISERROR ('The number of DELETE jobs running is %i.', 10, 1, @NumDELETEJobsRunning) WITH NOWAIT
+
+/*
+	If we are already over the maximum number of jobs allowed, exit.
+*/
+IF @NumDELETEJobsRunning > @MaxNumJobs
+BEGIN
+	RAISERROR ('Maximum number of jobs is already running. Exit.', 10, 1) WITH NOWAIT
+	RETURN
+END
+
+/*
+	Test to see how long our deletion test is taking at the moment.
+	The test consists of deleting 127 records using TOP (@NumRowsToDelete).
+*/
+SET @Avg = 0.0
+SET @i = 5
+
+RepeatLine:
+
+RAISERROR ('Repopulating mnList16.dbo.D1YNMList51', 10, 1) WITH NOWAIT
+
+INSERT mnList16.dbo.D1YNMList51
+SELECT * FROM mnList16.dbo.D_YNMList_
+
+DBCC DROPCLEANBUFFERS
+
+RAISERROR ('Deletions Starting', 10, 1) WITH NOWAIT
+
+SET @RowCount = 1
+SET @SQL = 'DELETE TOP (' + CONVERT(VARCHAR, @NumRowsToDelete) + ') mnList16.dbo.D1YNMList51 WITH (ROWLOCK) WHERE MemberID = 7843143'
+
+SET @Date = GetDate()
+WHILE @RowCount > 0
+BEGIN
+	EXEC (@SQL)
+	SET @RowCount = @@ROWCOUNT
+END
+
+SET @Duration = DATEDIFF("ms", @Date, GetDate())
+SET @Avg += @Duration
+RAISERROR ('Deletions Completed. Duration was %i ms.', 10, 1, @Duration) WITH NOWAIT
+
+WAITFOR DELAY '00:00:02'
+
+SET @i -= 1
+IF @i > 0
+	GOTO RepeatLine
+
+--SET @iAvg = CONVERT(INT, @Avg / (@NumDELETEJobsRunning * 10.0))
+SET @iAvg = CONVERT(INT, @Avg / 5.0)
+
+RAISERROR ('Average Duration (ms) Of Loop Test is %i', 10, 1, @iAvg) WITH NOWAIT
+
+IF @iAvg < @MaxNumMilliSecondsThreshold
+BEGIN
+	IF @fNumberJobsLowered = 0
+	BEGIN
+		/*
+			If test took less than @MaxNumSecondsThreshold seconds to run, increase the number of jobs by 2.
+		*/
+		IF @NumDELETEJobsRunning >= @MinNumJobs
+		BEGIN
+			SET @NumDELETEJobsRunning += 2
+		END
+		ELSE
+		BEGIN
+			SET @NumDELETEJobsRunning = @MinNumJobs
+		END
+		IF @NumDELETEJobsRunning > @MaxNumJobs
+		BEGIN
+			RAISERROR ('Maximum number of jobs is already running. Exit.', 10, 1) WITH NOWAIT
+			RETURN
+		END
+		RAISERROR ('Average Duration Of Loop Test is UNDER threshold. Raising number of DELETE jobs to %i.', 10, 1, @NumDELETEJobsRunning) WITH NOWAIT
+		
+		IF @NumDELETEJobsRunning BETWEEN @MinNumJobs AND @MaxNumJobs
+		BEGIN
+			RAISERROR ('Updating the [DW Administer DELETE Jobs] job to keep %i DELETE jobs running.', 10, 1, @NumDELETEJobsRunning) WITH NOWAIT
+			SET @SQL = 'EXEC msdb.dbo.sp_update_jobstep @job_name=''' + 'DW Administer DELETE Jobs' + 
+				''', @step_id=1, @command=''up_DeadWoodManageDELETEJobs2 ' + CONVERT(VARCHAR, @NumDELETEJobsRunning) + ', 100'''
+			EXEC (@SQL)
+			RAISERROR ('The [DW Administer DELETE Jobs] job has been updated.', 10, 1, @NumDELETEJobsRunning) WITH NOWAIT
+		END
+		
+		--EXEC up_DeadWoodManageDELETEJobs2 @NumDELETEJobsRunning, 100
+		
+		SET @Subject = 'Admin Admin raised # jobs to ' + CONVERT(VARCHAR, @NumDELETEJobsRunning)
+		
+		EXEC msdb.dbo.sp_send_dbmail
+			@profile_name='admin',
+			@recipients='gcollazo@spark.net',
+			@subject=@Subject,
+			@body=''
+		
+		RETURN
+		
+		--IF @NumDELETEJobsRunning > 200
+		--BEGIN
+		--	RAISERROR ('Sleeping for 1 minute', 10, 1) WITH NOWAIT
+		--	WAITFOR DELAY '00:01:00'
+		--END
+		--ELSE
+		--BEGIN
+		--	RAISERROR ('Sleeping for 20 seconds', 10, 1) WITH NOWAIT
+		--	WAITFOR DELAY '00:00:20'
+		--END
+		
+		--SET @Avg = 0.0
+		--SET @i = 10
+		
+		--GOTO RepeatLine
+	END
+END
+ELSE
+BEGIN
+	/*
+		For now, if we are over, lower the job count by 10, then exit.
+		Jobs are not stopped, they are just allowed to stop by themselves.
+	*/
+	SET @NumDELETEJobsRunning -= 2
+	IF @NumDELETEJobsRunning < @MinNumJobs
+	BEGIN
+		RAISERROR ('Minimum number of jobs is already running. Exit.', 10, 1) WITH NOWAIT
+		RETURN
+	END
+	
+	IF @NumDELETEJobsRunning BETWEEN @MinNumJobs AND @MaxNumJobs
+	BEGIN
+		RAISERROR ('Updating the [DW Administer DELETE Jobs] job to keep %i DELETE jobs running.', 10, 1, @NumDELETEJobsRunning) WITH NOWAIT
+		SET @SQL = 'EXEC msdb.dbo.sp_update_jobstep @job_name=''' + 'DW Administer DELETE Jobs' + 
+			''', @step_id=1, @command=''up_DeadWoodManageDELETEJobs2 ' + CONVERT(VARCHAR, @NumDELETEJobsRunning) + ', 100'''
+		EXEC (@SQL)
+		RAISERROR ('The [DW Administer DELETE Jobs] job has been updated.', 10, 1, @NumDELETEJobsRunning) WITH NOWAIT
+	END
+	
+	SET @Subject = 'Admin Admin lowered # jobs to ' + CONVERT(VARCHAR, @NumDELETEJobsRunning)
+	
+	EXEC msdb.dbo.sp_send_dbmail
+		@profile_name='admin',
+		@recipients='gcollazo@spark.net',
+		@subject=@Subject,
+		@body=''
+	
+	RETURN
+
+	/*
+		If test took more than @MaxNumSecondsThreshold seconds to run, reduce the number of jobs by 1, then sleep for 1 minute.
+		After 1 minute, repeat the test.
+		Continue ramping down until the test takes less than @MaxNumSecondsThreshold seconds to run.
+	*/
+	--SET @fNumberJobsLowered = 1
+	
+	--SET @NumDELETEJobsRunning -= 1
+	--IF @NumDELETEJobsRunning < @MaxNumJobs
+	--BEGIN
+	--	RAISERROR ('Minimum number of jobs is already running. Exit.', 10, 1) WITH NOWAIT
+	--	RETURN
+	--END
+	--RAISERROR ('Average Duration Of Loop Test is OVER threshold. Lowering number of DELETE jobs to %i.', 10, 1, @NumDELETEJobsRunning) WITH NOWAIT
+	
+	--RAISERROR ('Updating the [DW Administer DELETE Jobs] job to keep %i DELETE jobs running.', 10, 1, @NumDELETEJobsRunning) WITH NOWAIT
+	--SET @SQL = 'EXEC msdb.dbo.sp_update_jobstep @job_name=''' + 'DW Administer DELETE Jobs' + 
+	--	''', @step_id=1, @command=''up_DeadWoodManageDELETEJobs ' + CONVERT(VARCHAR, @NumDELETEJobsRunning) + ', 100000, 200, ' + CONVERT(VARCHAR, @NumRowsToDelete) + ''''
+	--EXEC (@SQL)
+	--RAISERROR ('The [DW Administer DELETE Jobs] job has been updated.', 10, 1, @NumDELETEJobsRunning) WITH NOWAIT
+	
+	--EXEC up_DeadWoodManageDELETEJobs @NumDELETEJobsRunning, 100000, 200, @NumRowsToDelete
+	
+	--IF @NumDELETEJobsRunning > 200
+	--BEGIN
+	--	RAISERROR ('Sleeping for 1 minute', 10, 1) WITH NOWAIT
+	--	WAITFOR DELAY '00:01:00'
+	--END
+	--ELSE
+	--BEGIN
+	--	RAISERROR ('Sleeping for 20 seconds', 10, 1) WITH NOWAIT
+	--	WAITFOR DELAY '00:00:20'
+	--END
+	
+	--SET @Avg = 0.0
+	--SET @i = 10
+	
+	--GOTO RepeatLine
+END

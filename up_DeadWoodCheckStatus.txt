@@ -1,0 +1,139 @@
+ALTER PROCEDURE dbo.up_DeadWoodCheckStatus
+AS
+CREATE TABLE #TraceStatus (
+	TraceFlag INT,
+	[Status] INT,
+	[Global] INT,
+	[Session] INT
+)
+DECLARE @start_date DATETIME, @now DATETIME
+DECLARE @NumProcessed INT, @HourlyRate INT, @NumJobs INT
+DECLARE @Subj VARCHAR(1000), @Text VARCHAR(8000)
+DECLARE @x INT
+
+SET @now = GetDate()
+SET @start_date = DATEADD(MINUTE, -60, @now)
+
+--IF DATEPART(HOUR, @now) NOT BETWEEN 10 and 23
+--BEGIN
+--	RETURN
+--END
+
+SELECT @HourlyRate = COUNT(1) FROM dbo.MembersDeadwooded WHERE DeadWoodDate BETWEEN @start_date AND @now
+	and MemberID is not null and CommunityID is not null
+--SET @HourlyRate *= 2
+--SELECT @NumProcessed = COUNT(1) FROM dbo.MembersDeadwooded WHERE DeadWoodDate BETWEEN @start_date AND @now
+--SET @HourlyRate = @NumProcessed / DATEDIFF(HOUR, @start_date, @now)
+
+SET @Subj = 'DW Hourly Rate = ' + left(convert(varchar, cast(@HourlyRate as money), 1), LEN(convert(varchar, cast(@HourlyRate as money), 1)) - 3)
+
+--select @x = 16-count(1) from MembersDeadwooded where [Year] = 1995
+--if @x < 0
+--	set @x = 0
+--set @Text = '
+--' + left(convert(varchar, cast(@x as money), 1), LEN(convert(varchar, cast(@x as money), 1)) - 3) + ' left for 1995'
+
+--select @x = 208-count(1) from MembersDeadwooded where [Year] = 1996
+--if @x < 0
+--	set @x = 0
+--set @Text += '
+--' + left(convert(varchar, cast(@x as money), 1), LEN(convert(varchar, cast(@x as money), 1)) - 3) + ' left for 1996'
+
+--select @x = 979-count(1) from MembersDeadwooded where [Year] = 1997
+--if @x < 0
+--	set @x = 0
+--set @Text += '
+--' + left(convert(varchar, cast(@x as money), 1), LEN(convert(varchar, cast(@x as money), 1)) - 3) + ' left for 1997'
+
+--select @x = 2508-count(1) from MembersDeadwooded where [Year] = 1998
+--if @x < 0
+--	set @x = 0
+--set @Text += '
+--' + left(convert(varchar, cast(@x as money), 1), LEN(convert(varchar, cast(@x as money), 1)) - 3) + ' left for 1998'
+
+--select @x = 10415-count(1) from MembersDeadwooded where [Year] = 1999
+--if @x < 0
+--	set @x = 0
+--set @Text += '
+--' + left(convert(varchar, cast(@x as money), 1), LEN(convert(varchar, cast(@x as money), 1)) - 3) + ' left for 1999
+
+
+
+--'
+
+--select @x = 223553-count(1) from MembersDeadwooded where [Year] = 2000
+--if @x < 0
+--	set @x = 0
+--set @Text = '
+--' + left(convert(varchar, cast(@x as money), 1), LEN(convert(varchar, cast(@x as money), 1)) - 3) + ' left for 2000 (etDW 11/29)'
+
+--select @x = 967701-count(1) from MembersDeadwooded where [Year] = 2001
+--if @x < 0
+--	set @x = 0
+--set @Text = '
+--' + left(convert(varchar, cast(@x as money), 1), LEN(convert(varchar, cast(@x as money), 1)) - 3) + ' left for 2001 (etDW 12/03)'
+
+--select @x = 2106713-count(
+--	distinct (convert(bigint, convert(bigint, MemberID) + convert(bigint, CommunityID*100000000)))
+--) from MembersDeadwooded where [Year] = 2002
+--if @x < 0
+--	set @x = 0
+--set @Text = '
+--' + left(convert(varchar, cast(@x as money), 1), LEN(convert(varchar, cast(@x as money), 1)) - 3) + ' left for 2002 (etDW 12/17 [late])'
+
+select @x = 5401914-count(1) from MembersDeadwooded where [Year] = 2003
+if @x < 0
+	set @x = 0
+set @Text = '
+' + left(convert(varchar, cast(@x as money), 1), LEN(convert(varchar, cast(@x as money), 1)) - 3) + ' left for 2003 (etDW 1/2-1/5)'	--14 days?
+
+select @x = 7974528-count(1) from MembersDeadwooded where [Year] = 2004
+if @x < 0
+	set @x = 0
+set @Text += '
+' + left(convert(varchar, cast(@x as money), 1), LEN(convert(varchar, cast(@x as money), 1)) - 3) + ' left for 2004 (etDW 1/22-1/26)'--21 days
+
+select @x = 6256007-count(
+	distinct (convert(bigint, convert(bigint, MemberID) + convert(bigint, CommunityID*100000000)))
+) from MembersDeadwooded where [Year] = 2005
+if @x < 0
+	set @x = 0
+set @Text += '
+' + left(convert(varchar, cast(@x as money), 1), LEN(convert(varchar, cast(@x as money), 1)) - 3) + ' left for 2005 (etDW 2/8-2/11)'--16 days
+
+
+
+SELECT *
+INTO #JobInfo
+FROM OPENROWSET(
+	'sqloledb', 
+	'server=(local);trusted_connection=yes',
+	'set fmtonly off;exec msdb.dbo.sp_help_job')
+	
+SELECT @NumJobs = COUNT(1) FROM #JobInfo WHERE current_execution_status = 1 AND [Name] LIKE 'DW Deletes%'
+
+SET @Subj += '; ' + CONVERT(VARCHAR, @NumJobs) + ' jobs'
+
+INSERT INTO #TraceStatus (TraceFlag, [Status], [Global], [Session])
+EXEC ('DBCC TRACESTATUS (661)')
+
+IF NOT EXISTS (SELECT 1 FROM #TraceStatus WHERE [Status]=1 AND [Global]=1)
+BEGIN
+	SET @Subj = 'GHOST ON! ' + @Subj
+	
+	set @Text += '
+
+Ghost Record Removal is on! (trace flag 661 is off!)'
+END
+ELSE
+BEGIN
+	set @Text += '
+
+Ghost Record Removal is off (trace flag 661 is on)'
+END
+
+EXEC msdb.dbo.sp_send_dbmail
+    @profile_name='admin',
+    @recipients='gcollazo@spark.net',
+    @subject=@Subj,
+    @body=@Text

@@ -1,0 +1,56 @@
+USE [mnDBA]
+GO
+/****** Object:  StoredProcedure [dbo].[usp_sp1_getTablesThatHaveColumns]    Script Date: 10/26/2011 17:50:08 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+ALTER PROCEDURE [dbo].[usp_sp1_getTablesThatHaveColumns] (@pk varchar(max),@lvl int)
+as
+begin
+	declare @sql varchar(max)
+	--,@id varchar(max)
+	--set @id=NEWID()
+	--set @id=replace(@id,'-','_')
+	--select '[usp_sp1_getTablesThatHaveColumns] with pk of ' +  @pk
+	--print @lvl
+	--print @pk
+	--select @lvl=@lvl+1
+	--select '##ProcessedPKs',* from ##ProcessedPKs
+	insert into ##ProcessedPKs
+	select @pk
+	where @pk not in (select searchcol from ##ProcessedPKs)  /* Dont do the same PK Twice in the same run */
+	if @@ROWCOUNT >0
+	begin
+		--create table #results (databasename sysname,schemaname sysname, tablename sysname,cols varchar(max),pk varchar(max),lvl int)
+		set @sql=
+		'declare @sq varchar(max)
+			select @sq=''select distinct ''''[''''+DatabaseName+'''']'''', ''''[''''+SchemaName+'''']'''', ''''[''''+tablename+'''']'''',''''' + @pk + ''''',pk,''''' + convert(varchar(100),@lvl) + ''''' from (
+					select DatabaseName, SchemaName, tablename,(select pk from #PKKEYS p where  a.DatabaseName= p.databasename and a.TableName=p.tablename)as pk From ##AllTablesColumns a inner join  [mnDBA].[dbo].[fn_CSVToTable] (''''' + @pk + ''''') b on b.string=a.ColumnName  
+					--where databasename = ''''eporder''''
+					where not exists (select 1 from ##DeadWoodTables dw where dw.dbname=a.DatabaseName and dw.schemaname=a.schemaname and dw.tablename=a.tablename)
+					and tablename <> ''''dtproperties''''
+					group by DatabaseName, SchemaName, tablename
+					having count(1) >= (select COUNT(1) from [mnDBA].[dbo].[fn_CSVToTable] (''''' + @pk + ''''') )
+					) t 
+					order by 1,2
+					''
+					
+			exec (@sq)
+
+			--print ''Results''
+			--print @sq
+			
+			
+		'
+		--print @sql
+		--insert into #results
+		--exec (@sql)
+		--select 'results',* from #results
+
+		insert into ##DeadWoodTables (dbname,schemaname,tablename,searchcol,pk,lvl)
+		exec (@sql)
+		exec [usp_sp1_getPKThatHaveColumns] @pk,@lvl
+	end
+	--print 'calling PK PROC ' + @pk
+end

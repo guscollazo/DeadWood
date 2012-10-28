@@ -1,0 +1,75 @@
+ALTER FUNCTION dbo.fn_PrepareStatement2
+(
+	@SQLCmd VARCHAR(8000),
+	@MultiCommunity BIT
+)
+RETURNS VARCHAR(MAX)
+AS
+BEGIN
+	DECLARE @ReturnValue VARCHAR(8000)
+	DECLARE @crlf NCHAR(2) = CHAR(13) + CHAR(10)
+
+	SET @ReturnValue = @SQLCmd
+	IF @MultiCommunity = 0
+	BEGIN
+		SET @ReturnValue = REPLACE(
+			REPLACE(
+			REPLACE(
+				REPLACE(
+				REPLACE(
+					REPLACE(
+					REPLACE(
+						REPLACE(
+						REPLACE(
+							REPLACE(
+							REPLACE(
+								REPLACE(
+								REPLACE(
+									REPLACE(
+									REPLACE(
+										REPLACE(
+										REPLACE(
+											REPLACE(
+											REPLACE(@ReturnValue, 
+												'#DeadWoodMember a (nolock) on b.[GroupID] = a.[GroupID] AND ',
+												'#DeadWoodMember a (nolock) on '),
+												'#DeadWoodMember a (nolock) on b.[CallingSystemID] = a.[GroupID] AND ',
+												'#DeadWoodMember a (nolock) on '),
+											'#DeadWoodMember b (nolock) on c.[GroupID] = b.[GroupID] AND ', 
+											'#DeadWoodMember b (nolock) on '),
+											'#DeadWoodMember b (nolock) on c.[CallingSystemID] = b.[GroupID] AND ', 
+											'#DeadWoodMember b (nolock) on '),
+										'#DeadWoodMember c (nolock) on d.[GroupID] = c.[GroupID] AND ',
+										'#DeadWoodMember c (nolock) on '),
+										'#DeadWoodMember b (nolock) on c.[CallingSystemID] = b.[GroupID] AND ', 
+										'#DeadWoodMember b (nolock) on '),
+									'#DeadWoodMember d (nolock) on e.[GroupID] = d.[GroupID] AND ',
+									'#DeadWoodMember d (nolock) on '),
+									'#DeadWoodMember b (nolock) on c.[CallingSystemID] = b.[GroupID] AND ', 
+									'#DeadWoodMember b (nolock) on '),
+								'#DeadWoodMember e (nolock) on f.[GroupID] = e.[GroupID] AND ',
+								'#DeadWoodMember e (nolock) on '),
+								'#DeadWoodMember e (nolock) on f.[CallingSystemID] = e.[GroupID] AND ',
+								'#DeadWoodMember e (nolock) on '),
+							'AND a.[GroupID] =b.[SiteID]',
+							''),
+						'AND a.CallingSystemID =b.GroupID',
+						''),
+						'AND a.CallingSystemID=b.GroupID',
+						''),
+					'AND b.CallingSystemID =c.GroupID',
+					''),
+					'AND b.CallingSystemID=c.GroupID',
+					''),
+				'AND c.CallingSystemID =d.GroupID',
+				''),
+				'AND c.CallingSystemID=d.GroupID',
+				''),
+			'AND d.CallingSystemID =e.GroupID',
+			''),
+			'AND d.CallingSystemID=e.GroupID',
+			'')
+	END
+
+	RETURN @ReturnValue
+END

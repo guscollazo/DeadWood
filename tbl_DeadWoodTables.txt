@@ -1,0 +1,13 @@
+CREATE TABLE [dbo].[DeadWoodTables](
+	[dbname] [sysname] NOT NULL,
+	[schemaname] [sysname] NOT NULL,
+	[tablename] [sysname] NOT NULL,
+	[searchcol] [varchar](8000) NULL,
+	[pk] [varchar](8000) NULL,
+	[lvl] [int] NULL,
+	[pk_searchcol] [varchar](8000) NULL,
+	[ignore] [bit] NULL
+) ON [PRIMARY]
+GO
+
+CREATE INDEX IX_DeadWoodTables_DBName_SchemaName_TableName_INC_lvl ON dbo.DeadWoodTables (DBName, SchemaName, TableName) INCLUDE (lvl) ON [PRIMARY]

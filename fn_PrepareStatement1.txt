@@ -1,0 +1,190 @@
+ALTER FUNCTION dbo.fn_PrepareStatement1
+(
+	@SQLCmd VARCHAR(8000),
+	@DatabaseTableName VARCHAR(1000)
+)
+RETURNS VARCHAR(MAX)
+AS
+BEGIN
+	DECLARE @ReturnValue VARCHAR(8000)
+	DECLARE @crlf NCHAR(2) = CHAR(13) + CHAR(10)
+
+	IF @DatabaseTableName IS NULL
+	BEGIN
+		SET @ReturnValue = REPLACE(
+			REPLACE(
+				REPLACE(
+					REPLACE(
+						REPLACE (
+							REPLACE (
+								@SQLCmd, 
+								'@1@',
+								@crlf + 'declare @x int' + @crlf + 'set nocount on' + @crlf + 'set @x = 1' + @crlf + 'while @x>0' + @crlf + 'begin' + @crlf + 
+										'delete top (@DeleteTop) '
+							),
+							'i @2@',
+							'@2@'),
+						'@2@',
+						@crlf + 'set @x=@@rowcount' + @crlf + 'END' + @crlf
+					),
+					'@OUTPUT@',
+					'OUTPUT @MemberID, '
+				),
+				'vDeadWoodMembers',
+				'#DeadWoodMember'
+			),
+			'a.DomainID',
+			'a.GroupID'
+		)
+	END
+	ELSE
+	BEGIN
+		SET @ReturnValue = REPLACE(
+			REPLACE(
+				REPLACE(
+					REPLACE(
+						REPLACE (
+							REPLACE (
+								REPLACE (
+									@SQLCmd, 
+									'@1@',
+									@crlf + 'declare @x int' + @crlf + 'set nocount on' + @crlf + 'set @x = 1' + @crlf + 'while @x>0' + @crlf + 'begin' + @crlf + 
+											'delete top (@DeleteTop) FROM ' + @DatabaseTableName + ' FROM '
+								),
+								'i @2@',
+								'@2@'),
+							'@2@',
+							@crlf + 'set @x=@@rowcount' + @crlf + 'END' + @crlf
+						),
+						'@OUTPUT@',
+						'OUTPUT @MemberID, '
+					),
+					'FROM   OUTPUT',
+					'OUTPUT'
+				),
+				'vDeadWoodMembers',
+				'#DeadWoodMember'
+			),
+			'a.DomainID',
+			'a.GroupID'
+		)
+	END
+	SET @ReturnValue = REPLACE(
+		REPLACE(
+			REPLACE(
+				REPLACE(
+					REPLACE(
+						REPLACE(
+							REPLACE(
+								REPLACE(@ReturnValue, 'a.[FromMemberID]', 'a.[MemberID]'),
+								'a.[ToMemberID]',
+								'a.[MemberID]'),
+							'a.[CustomerID]',
+							'a.[MemberID]'),
+						'a.[CallingSystemID]',
+						'a.[GroupID]'),
+					'a.[DomainID]',
+					'a.[GroupID]'),
+				'a.[SiteID]',
+				'a.[GroupID]'),
+			'a.[CommunityID]',
+			'a.[GroupID]'),
+		'a.[BrandID]',
+		'a.[GroupID]')
+	SET @ReturnValue = REPLACE(
+		REPLACE(
+			REPLACE(
+				REPLACE(
+					REPLACE(
+						REPLACE(
+							REPLACE(
+								REPLACE(@ReturnValue, 'dbo.DeadWoodMembers17', '#DeadWoodMember'),
+								'dbo.DeadWoodMembers18',
+								'#DeadWoodMember'),
+							'dbo.DeadWoodMembers19',
+							'#DeadWoodMember'),
+						'dbo.DeadWoodMembers20',
+						'#DeadWoodMember'),
+					'dbo.DeadWoodMembers21',
+					'#DeadWoodMember'),
+				'dbo.DeadWoodMembers22',
+				'#DeadWoodMember'),
+			'dbo.DeadWoodMembers23',
+			'#DeadWoodMember'),
+		'dbo.DeadWoodMembers24',
+		'#DeadWoodMember')
+	SET @ReturnValue = REPLACE(
+		REPLACE(
+			REPLACE(
+				REPLACE(
+					REPLACE(
+						REPLACE(
+							REPLACE(@ReturnValue, 'dbo.DeadWoodMembers10', '#DeadWoodMember'),
+							'dbo.DeadWoodMembers11',
+							'#DeadWoodMember'),
+						'dbo.DeadWoodMembers12',
+						'#DeadWoodMember'),
+					'dbo.DeadWoodMembers13',
+					'#DeadWoodMember'),
+				'dbo.DeadWoodMembers14',
+				'#DeadWoodMember'),
+			'dbo.DeadWoodMembers15',
+			'#DeadWoodMember'),
+		'dbo.DeadWoodMembers16',
+		'#DeadWoodMember')
+	SET @ReturnValue = REPLACE(
+		REPLACE(
+			REPLACE(
+				REPLACE(
+					REPLACE(
+						REPLACE(
+							REPLACE(
+								REPLACE(
+									REPLACE(@ReturnValue, 'dbo.DeadWoodMembers1', '#DeadWoodMember'),
+									'dbo.DeadWoodMembers2',
+									'#DeadWoodMember'),
+								'dbo.DeadWoodMembers3',
+								'#DeadWoodMember'),
+							'dbo.DeadWoodMembers4',
+							'#DeadWoodMember'),
+						'dbo.DeadWoodMembers5',
+						'#DeadWoodMember'),
+					'dbo.DeadWoodMembers6',
+					'#DeadWoodMember'),
+				'dbo.DeadWoodMembers7',
+				'#DeadWoodMember'),
+			'dbo.DeadWoodMembers8',
+			'#DeadWoodMember'),
+		'dbo.DeadWoodMembers9',
+		'#DeadWoodMember')
+	SET @ReturnValue = REPLACE(
+		REPLACE(
+			REPLACE(
+				REPLACE(
+					REPLACE(
+						REPLACE(
+							REPLACE(
+								REPLACE(
+									REPLACE(@ReturnValue, 
+											'#DeadWoodMember0',
+											'#DeadWoodMember'),
+										'#DeadWoodMember1',
+										'#DeadWoodMember'),
+									'#DeadWoodMember2',
+									'#DeadWoodMember'),
+								'#DeadWoodMember3',
+								'#DeadWoodMember'),
+							'#DeadWoodMember4',
+							'#DeadWoodMember'),
+						'#DeadWoodMember5',
+						'#DeadWoodMember'),
+					'#DeadWoodMember6',
+					'#DeadWoodMember'),
+				'#DeadWoodMember7',
+				'#DeadWoodMember'),
+			'#DeadWoodMember8',
+			'#DeadWoodMember')
+	SET @ReturnValue = REPLACE(@ReturnValue, '@M@', '@MemberID')
+
+	RETURN @ReturnValue
+END

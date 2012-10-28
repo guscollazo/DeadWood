@@ -1,0 +1,6 @@
+CREATE TABLE [dbo].[AllTablesColumns](
+	[DatabaseName] [sysname] NOT NULL,
+	[TableName] [sysname] NOT NULL,
+	[SchemaName] [sysname] NOT NULL,
+	[ColumnName] [sysname] NOT NULL
+) ON [PRIMARY]

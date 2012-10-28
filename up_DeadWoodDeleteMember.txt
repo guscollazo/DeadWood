@@ -1,0 +1,21 @@
+ALTER PROCEDURE dbo.up_DeadWoodDeleteMember
+	@i INT,
+	@max INT
+AS
+DECLARE @MemberID INT, @CommunityID INT, @Year INT
+
+WHILE @i <= @max
+BEGIN
+	SELECT @MemberID=MemberID, @CommunityID=CommunityID, @Year=Year
+	FROM dbo.MembersToDeadwood (NOLOCK)
+	WHERE MembersToDeadwoodID = @i
+	
+	IF @MemberID IS NOT NULL
+	BEGIN
+		EXEC up_DeadWood_DeleteMember5 @MemberID=@MemberID, @CommunityID=@CommunityID, @Operation='Delete Everything', @DeleteTop='100'
+
+		INSERT INTO dbo.MembersDeadwooded (MemberID, CommunityID, [Year]) VALUES (@MemberID, @CommunityID, @Year)
+	END
+	
+	SET @i += 1
+END

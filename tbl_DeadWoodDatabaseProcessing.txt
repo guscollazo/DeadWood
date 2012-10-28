@@ -1,0 +1,20 @@
+CREATE TABLE [dbo].[DeadWoodDatabaseProcessing](
+	[ID] [int] IDENTITY(1,1) NOT NULL,
+	[DatabaseName] [varchar](50) NOT NULL,
+	[ShrinkStatus] [varchar](20) NOT NULL,
+	[TransferStatus] [varchar](20) NOT NULL,
+	[InsertDate] [datetime] NOT NULL,
+ CONSTRAINT [PK_DeadWoodDatabaseProcessing] PRIMARY KEY CLUSTERED 
+(
+	[ID] ASC
+)WITH (PAD_INDEX  = OFF, STATISTICS_NORECOMPUTE  = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS  = ON, ALLOW_PAGE_LOCKS  = ON, FILLFACTOR = 90) ON [PRIMARY]
+) ON [PRIMARY]
+GO
+
+ALTER TABLE [dbo].[DeadWoodDatabaseProcessing] ADD  CONSTRAINT [DF_DeadWoodDatabaseProcessing_ShrinkStatus]  DEFAULT ('Not Ready') FOR [ShrinkStatus]
+GO
+
+ALTER TABLE [dbo].[DeadWoodDatabaseProcessing] ADD  CONSTRAINT [DF_DeadWoodDatabaseProcessing_TransferStatus]  DEFAULT ('Not Ready') FOR [TransferStatus]
+GO
+
+ALTER TABLE [dbo].[DeadWoodDatabaseProcessing] ADD  CONSTRAINT [DF_DeadWoodDatabaseProcessing_InsertDate]  DEFAULT (getdate()) FOR [InsertDate]

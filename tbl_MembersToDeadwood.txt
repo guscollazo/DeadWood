@@ -1,0 +1,9 @@
+USE [mnDBA]
+GO
+ALTER TABLE dbo.MembersToDeadwood ADD CONSTRAINT
+	PK_MembersToDeadwood PRIMARY KEY CLUSTERED (MembersToDeadwoodID)
+WITH (STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON)
+ON [PRIMARY]
+GO
+
+CREATE NONCLUSTERED INDEX IX_MembersToDeadwood ON dbo.MembersToDeadwood (MembersToDeadwoodID, MemberID, CommunityID, [Year])

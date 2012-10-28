@@ -1,0 +1,829 @@
+USE [mnDBA]
+GO
+/****** Object:  StoredProcedure [dbo].[usp_sp1_RunProcess]    Script Date: 10/26/2011 17:47:48 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+/*
+	GC: @IncludeTargetsWherePKEqualSearchColumn parameter...
+	When =1, then all table/searchcol/pk combinations that are found are included in ##DeadWoodTables.
+	When =0, then combinations where searchcol=pk are omitted.
+		For example, normally the mnList1.dbo.D10YNMList0 table has these records in ##DeadWoodTables:
+		TableName		SearchCol											PK													LVL
+		D10YNMList0		MemberID											DirectionFlag,ListTypeID,MemberID,TargetMemberID	1
+		D10YNMList0		MemberID											DirectionFlag,ListTypeID,MemberID,TargetMemberID	0
+		D10YNMList0		DirectionFlag,ListTypeID,MemberID,TargetMemberID	DirectionFlag,ListTypeID,MemberID,TargetMemberID	1
+		If the parameter is set to 0, then only these records would be in ##DeadWoodTables:
+		TableName		SearchCol											PK													LVL
+		D10YNMList0		MemberID											DirectionFlag,ListTypeID,MemberID,TargetMemberID	1
+		D10YNMList0		MemberID											DirectionFlag,ListTypeID,MemberID,TargetMemberID	0
+		This would help limit the number of DELETE statements that are generated for DeadWood.
+	When =1, 557,260 commands were generated to create the DELETE statements for mnList1.
+	When =0,   2,235 commands were generated to create the DELETE statements for mnList1.
+*/
+ALTER PROCEDURE [dbo].[usp_sp1_RunProcess]
+	@IncludeTargetsWherePKEqualSearchColumn bit = 1
+,	@Silent									bit = 0
+as
+
+SET NOCOUNT ON
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+
+DECLARE @now VARCHAR(25), @stars VARCHAR(130)
+
+SET @stars = REPLICATE('*', 100)
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - start]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+--IF OBJECT_ID('tempdb..##MembersToDelete') IS NOT NULL
+--    DROP TABLE ##MembersToDelete
+
+--CREATE TABLE ##MembersToDelete (
+--    MemberID		      		int
+--,	GroupID						int
+----,   MemberDatabase    			varchar(10)
+----,	MemberPartition				int
+----,	MemberAffinity				int
+----,   LastLogonDate     			datetime
+----,   MultiCommunity    			bit DEFAULT 1	--so we don't over-delete, we default to "multiple communities found"
+--)
+
+--insert into ##MembersToDelete
+--select 118843356,103
+--union
+--select 118843356,1003
+--union
+--select 118843356,3
+
+
+
+--Every column of every table
+IF OBJECT_ID('tempdb..##AllTablesColumns') IS NOT NULL 
+    DROP TABLE ##AllTablesColumns
+CREATE TABLE ##AllTablesColumns
+    (
+      DatabaseName SYSNAME NOT NULL ,
+      TableName SYSNAME NOT NULL ,
+      SchemaName SYSNAME NOT NULL ,
+      ColumnName SYSNAME NOT NULL
+    )
+
+--Every column of every member table (has a "MemberID" column)
+IF OBJECT_ID('tempdb..#PrimaryKeys') IS NOT NULL 
+    DROP TABLE #PrimaryKeys
+CREATE TABLE #PrimaryKeys
+    (
+      DatabaseName SYSNAME NOT NULL ,
+      TableName SYSNAME NULL ,
+      ConstraintName SYSNAME NULL
+    )
+
+--The columns of each PK
+IF OBJECT_ID('tempdb..#AllConstraints') IS NOT NULL 
+    DROP TABLE #AllConstraints
+
+CREATE TABLE #AllConstraints
+    (
+      DatabaseName SYSNAME NOT NULL ,
+      TableName SYSNAME NOT NULL ,
+      SchemaName SYSNAME NOT NULL ,
+      ColumnName VARCHAR(50) NULL ,
+      ConstraintName VARCHAR(MAX) NULL ,
+      isPK BIT NOT NULL
+    )
+
+DECLARE @Databases TABLE (ID INT IDENTITY, DatabaseName VARCHAR(500))
+
+DECLARE
+    @PhysicalDatabase VARCHAR(50) ,
+    @TableName VARCHAR(50) ,
+    @SchemaName VARCHAR(50) ,
+    @ColumnName VARCHAR(50) ,
+    @databasename SYSNAME ,
+    @pk VARCHAR(MAX) ,
+    @sq VARCHAR(MAX),
+    @csv varchar(max),
+	@cnt INT,
+	@cntTo INT,
+	@SQL VARCHAR(8000)
+--DECLARE @ConstraintName SYSNAME, @PrimaryKeys VARCHAR(MAX), @SearchColumns VARCHAR(MAX), @SearchColumnsMG VARCHAR(MAX), @WhereColumns VARCHAR(MAX)
+--DECLARE @SearchColumnsException VARCHAR(MAX)
+--DECLARE @DeletionOrderID INT, @RowsAdded INT
+--DECLARE @ErrorMsg NVARCHAR(2048)
+
+/*
+	Setup our work tables (20s)
+	
+	select top 100 'AllTablesColumns',* From ##AllTablesColumns
+	select top 100 'PrimaryKeys',* From #PrimaryKeys
+	select top 100 'AllConstraints',* From #AllConstraints
+*/
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt A]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+INSERT ##AllTablesColumns
+        ( DatabaseName ,
+          TableName ,
+          SchemaName ,
+          ColumnName
+        )
+        EXEC sp_MSforeachdb 
+            @command1 = 'SELECT ''?'',o.Name,s.Name,c.Name FROM ?.sys.objects o JOIN ?.dbo.syscolumns c ON o.object_id=c.ID JOIN ?.sys.schemas s ON o.schema_id=s.schema_id WHERE o.type=''U'' AND ''?'' <> ''tempdb'''
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt B]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+CREATE NONCLUSTERED INDEX ix_atc1
+ON ##AllTablesColumns ([ColumnName])
+INCLUDE ([DatabaseName],[TableName],[SchemaName])
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt C]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+CREATE NONCLUSTERED INDEX ix_atc2
+ON ##AllTablesColumns (DatabaseName, SchemaName, TableName, ColumnName)
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt D]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+INSERT INTO #PrimaryKeys
+        EXEC sp_MSforeachdb 
+            'SELECT ''?'',TABLE_NAME,CONSTRAINT_NAME FROM ?.INFORMATION_SCHEMA.TABLE_CONSTRAINTS A (nolock) WHERE CONSTRAINT_TYPE = ''PRIMARY KEY'' AND ''?'' <> ''tempdb'''
+
+/*
+	The code using sp_MSforeachdb was taking 10+ minutes to run. The alternative runs faster.
+*/
+--INSERT INTO #AllConstraints
+--        EXEC sp_MSforeachdb 
+--            'SELECT ''?'',TABLE_NAME,TABLE_SCHEMA,COLUMN_NAME,CONSTRAINT_NAME,0 FROM ?.INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE (nolock)'
+
+INSERT INTO @Databases (DatabaseName)
+SELECT [Name] FROM SYS.DATABASES
+EXCEPT
+SELECT DISTINCT DBName FROM dbo.DeadWoodFilter WHERE TableName IS NULL
+
+SET @cnt = 1
+SELECT @cntTo = MAX(ID) FROM @Databases
+WHILE @cnt < @cntTo
+BEGIN
+	SELECT @SQL = 'SELECT ''' + DatabaseName + ''',TABLE_NAME,TABLE_SCHEMA,COLUMN_NAME,CONSTRAINT_NAME,0 FROM ' + 
+		DatabaseName + '.INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE (nolock)', @databasename = DatabaseName
+	FROM @Databases
+	WHERE ID = @cnt
+
+	IF @Silent=0
+	BEGIN
+		SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+		RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt E] [%s]', 10, 1, @stars, @now, @databasename) WITH NOWAIT
+	END
+
+	INSERT INTO #AllConstraints (DatabaseName, TableName, SchemaName, ColumnName, ConstraintName, isPK)
+	EXEC (@SQL)
+	
+	SET @cnt += 1
+END
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt F]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+--INFORMATION_SCHEMA unfortunately includes system tables. We must filter them out
+DELETE
+        #AllConstraints
+    WHERE
+        ConstraintName IN ( 'pk_dtproperties', 'pk_dtscategories', 'pk_dtspackages', 'PK_DTSStatus' )
+        
+DELETE
+        ##AllTablesColumns
+    WHERE
+        DatabaseName IN (	SELECT
+								DBName
+							FROM
+                                dbo.DeadWoodFilter
+							WHERE
+								TableName IS NULL)
+								
+DELETE
+        #PrimaryKeys
+    WHERE
+     DatabaseName IN (	SELECT
+							DBName
+						FROM
+                            dbo.DeadWoodFilter
+						WHERE
+							TableName IS NULL)
+DELETE
+        #AllConstraints
+    WHERE
+        DatabaseName IN (	SELECT
+								DBName
+							FROM
+                                dbo.DeadWoodFilter
+							WHERE
+								TableName IS NULL)
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt G]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+UPDATE
+        ccu
+    SET 
+        ispk = 1
+    FROM
+        #AllConstraints ccu
+    INNER JOIN #PrimaryKeys tu
+    ON  tu.DatabaseName = ccu.DatabaseName
+        AND tu.ConstraintName = ccu.ConstraintName
+      AND tu.TableName = ccu.TableName
+      
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt H]', 10, 1, @stars, @now) WITH NOWAIT
+END  
+        
+IF OBJECT_ID('tempdb..#PKKEYS') IS NOT NULL 
+    DROP TABLE #PKKEYS
+
+SELECT DISTINCT
+        DatabaseName ,
+        schemaname ,
+        tablename ,
+        --GC: Updated to (8000) to allow for indexing.
+        CONVERT(VARCHAR(8000), PK) AS PK
+    INTO
+        #PKKEYS
+    FROM
+        (
+          SELECT
+                DatabaseName ,
+                schemaname ,
+                tablename ,
+                ColumnName ,
+                STUFF((
+                        SELECT
+                                ',' + RTRIM(CONVERT(VARCHAR(MAX), ColumnName))
+                            FROM
+                                #AllConstraints b
+                            WHERE
+                                a.DatabaseName = b.DatabaseName
+                                AND a.tablename = b.tablename
+                                AND a.ConstraintName = b.ConstraintName
+                      FOR
+                        XML PATH('')
+                      ), 1, 1, '') PK
+            FROM
+                #AllConstraints a
+            WHERE
+                ispk = 1
+            GROUP BY
+                DatabaseName ,
+                schemaname ,
+                tablename ,
+                ColumnName ,
+                ConstraintName
+        ) a
+    ORDER BY
+        DatabaseName ,
+        schemaname ,
+        tablename ,
+        PK
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt I]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+IF OBJECT_ID('tempdb..#TablesWithMemberIDAndGroup') IS NOT NULL
+    DROP TABLE #TablesWithMemberIDAndGroup
+create table #TablesWithMemberIDAndGroup (databasename sysname,schemaname sysname, tablename sysname, pk varchar(max))
+insert into #TablesWithMemberIDAndGroup
+SELECT DISTINCT
+        DatabaseName ,
+        SchemaName,
+        tablename ,
+        (
+          SELECT
+                pk
+            FROM
+                #PKKEYS p
+            WHERE
+                ac.DatabaseName = p.databasename
+                AND ac.TableName = p.tablename
+        ) AS pk
+    FROM
+        ##AllTablesColumns ac
+    WHERE
+--GC: Adding FromMemberID to include tables in mnMailLog. Also added CommunityID and BrandID.
+        ac.ColumnName IN ( 'MemberID', 'FromMemberID', 'CustomerID' )
+        AND EXISTS ( SELECT
+                            1
+                        FROM
+                            ##AllTablesColumns AS ac2
+                        WHERE
+                            ColumnName IN ( 'GroupID', 'CallingSystemID', 'DomainID', 'SiteID', 'CommunityID', 'BrandID' )
+                            AND ac2.tablename = ac.tablename
+                            AND ac2.DatabaseName = ac.DatabaseName )
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt J]', 10, 1, @stars, @now) WITH NOWAIT
+END
+                          
+IF OBJECT_ID('tempdb..#TablesWithMemberIDAndNoGroup') IS NOT NULL 
+    DROP TABLE #TablesWithMemberIDAndNoGroup
+create table #TablesWithMemberIDAndNoGroup (databasename sysname,schemaname sysname, tablename sysname, pk varchar(max))
+insert into #TablesWithMemberIDAndNoGroup
+SELECT DISTINCT
+        DatabaseName ,
+        SchemaName,
+        tablename ,
+        (
+          SELECT
+                pk
+            FROM
+                #PKKEYS p
+            WHERE
+                ac.DatabaseName = p.databasename
+                AND ac.TableName = p.tablename
+        ) AS pk
+    FROM
+        ##AllTablesColumns ac
+    WHERE
+        ac.ColumnName IN ( 'MemberID', 'FromMemberID', 'CustomerID' )
+        AND NOT EXISTS ( SELECT
+                            1
+                        FROM
+                            ##AllTablesColumns AS ac2
+                        WHERE
+                            
+                            ColumnName IN ( 'GroupID', 'CallingSystemID', 'DomainID', 'SiteID', 'CommunityID', 'BrandID' )
+                            AND ac2.tablename = ac.tablename
+                            AND ac2.DatabaseName = ac.DatabaseName )
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt K]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+/*
+	GC: Update #TablesWithMemberIDAndGroup using DeadWoodTargetKeyException. (mnPhotoStore's FileID & mnFile)
+*/
+UPDATE t
+SET t.pk = e.PrimaryKeys
+FROM #TablesWithMemberIDAndGroup t INNER JOIN dbo.DeadWoodTargetKeyException e
+	ON e.DBName1 = t.databasename
+	AND e.SchemaName1 = t.schemaname
+	AND e.TableName1 = t.tablename
+	AND e.ExceptionAction = 'UPDATE'
+	
+UPDATE t
+SET t.pk = e.PrimaryKeys
+FROM #TablesWithMemberIDAndNoGroup t INNER JOIN dbo.DeadWoodTargetKeyException e
+	ON e.DBName1 = t.databasename
+	AND e.SchemaName1 = t.schemaname
+	AND e.TableName1 = t.tablename
+	AND e.ExceptionAction = 'UPDATE'
+	
+UPDATE p
+SET p.PK = e.PrimaryKeys
+FROM #PKKEYS p INNER JOIN dbo.DeadWoodTargetKeyException e
+	ON e.DBName1 = p.DatabaseName
+	AND e.SchemaName1 = p.schemaname
+	AND e.TableName1 = p.tablename
+	AND e.ExceptionAction = 'UPDATE'
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt L]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+--select * from #TablesWithMemberIDAndGroup order by 2,3
+--return 
+
+IF OBJECT_ID('tempdb..#TablesWithMemberIDAndGroupWithPK') IS NOT NULL 
+    DROP TABLE #TablesWithMemberIDAndGroupWithPK
+create table #TablesWithMemberIDAndGroupWithPK (id int identity (1,1),databasename sysname not null,schemaname sysname not null,tablename sysname, pk varchar(max) not null)
+insert into #TablesWithMemberIDAndGroupWithPK
+select * from #TablesWithMemberIDAndGroup where pk is not null
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt M]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+IF OBJECT_ID('tempdb..#TablesWithMemberIDAndNoGroupWithPK') IS NOT NULL 
+    DROP TABLE #TablesWithMemberIDAndNoGroupWithPK
+create table #TablesWithMemberIDAndNoGroupWithPK (id int identity (1,1),databasename sysname not null,schemaname sysname not null,tablename sysname, pk varchar(max) not null)
+insert into #TablesWithMemberIDAndNoGroupWithPK
+select * from #TablesWithMemberIDAndNoGroup where pk is not null
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt N]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+IF OBJECT_ID('tempdb..##DeadWoodTables') IS NULL 
+BEGIN
+	CREATE TABLE ##DeadWoodTables (
+	  dbname sysname not null,
+	  schemaname sysname not null, 
+	  tablename sysname not null,
+	  --GC: Updated (MAX) to (8000) to allow for indexing.
+	  searchcol VARCHAR(8000),
+	  pk varchar(8000),
+	  lvl INT,
+	  pk_searchcol VARCHAR(8000),
+	  ignore BIT
+	)
+END
+
+IF OBJECT_ID('tempdb..##ProcessedPKs') IS NOT NULL 
+	DROP TABLE ##ProcessedPKs
+CREATE TABLE ##ProcessedPKs
+    (
+	  --GC: Updated (MAX) to (8000) to allow for indexing.
+      searchcol VARCHAR(8000) 
+    )
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt N]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+--GC: Added an index to speed up querying of ##ProcessedPKs
+CREATE NONCLUSTERED INDEX ix_processedpks ON ##ProcessedPKs (searchcol)
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt O]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+--GC: Indexes to speed up calls to usp_sp1_getTablesThatHaveColumns and usp_sp1_processes_recursion_Head.
+CREATE NONCLUSTERED INDEX ix_pk1 ON #PKKEYS ([DatabaseName],[tablename],[pk])
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt P]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+BEGIN TRY
+	CREATE NONCLUSTERED INDEX ix_deadwoodtables1 ON ##DeadWoodTables ([dbname],[schemaname],[tablename],[pk_searchcol])
+	CREATE NONCLUSTERED INDEX ix_deadwoodtables2 ON ##DeadWoodTables ([lvl],[pk]) INCLUDE ([dbname],[schemaname],[tablename],[searchcol],[pk_searchcol])
+	CREATE NONCLUSTERED INDEX ix_deadwoodtables3 ON ##DeadWoodTables ([dbname],[schemaname],[tablename],[lvl]) INCLUDE ([searchcol])
+	CREATE NONCLUSTERED INDEX ix_deadwoodtables4 ON ##DeadWoodTables ([dbname],[schemaname],[tablename],[searchcol],[pk])
+	CREATE NONCLUSTERED INDEX ix_deadwoodtables5 ON ##DeadWoodTables ([pk]) INCLUDE ([searchcol])
+	CREATE NONCLUSTERED INDEX ix_deadwoodtables6 ON ##DeadWoodTables ([searchcol], [tablename])
+	CREATE NONCLUSTERED INDEX ix_deadwoodtables7 ON ##DeadWoodTables (pk_searchcol, lvl, tablename, dbname) INCLUDE (schemaname, searchcol)
+	CREATE NONCLUSTERED INDEX ix_deadwoodtables8 ON ##DeadWoodTables ([lvl], [dbname]) INCLUDE (schemaname, tablename, searchcol, pk_searchcol)
+END TRY
+BEGIN CATCH
+END CATCH
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt 1]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+DECLARE @RowCount INT
+SET @RowCount = (select COUNT(1) from #TablesWithMemberIDAndGroupWithPK)
+
+DECLARE @I INT= 1
+-- Loop through the rows of a table @myTable
+WHILE (@I <= @RowCount)
+BEGIN
+	DECLARE P_Cursor CURSOR FORWARD_ONLY
+	FOR
+		SELECT --top 1
+				databasename ,
+				schemaname,
+				tablename ,
+				pk
+			FROM
+				#TablesWithMemberIDAndGroupWithPK
+			where id=@i
+			--and databasename = 'eporder'
+			--and tablename ='order'
+			--and pk like '%guid%'
+			ORDER BY
+				databasename ,
+				tablename
+
+	OPEN P_Cursor
+	FETCH NEXT FROM P_Cursor
+	INTO @databasename, @schemaname,@tablename, @pk
+	WHILE @@FETCH_STATUS = 0 
+		BEGIN		
+			--GC: Uncommenting the TRUNCATE TABLE statement so ##ProcessedPKs are not reprocessed repeatedly.
+			--truncate table ##ProcessedPKs
+			
+			set @csv=null
+			select  @csv=coalesce(@csv+',','') +columnname
+			from ##AllTablesColumns where TableName=@TableName and DatabaseName=@databasename and SchemaName=@SchemaName
+			and ColumnName IN ( 'MemberID', 'FromMemberID', 'CustomerID' , 'GroupID', 'CallingSystemID', 'DomainID', 'SiteID', 'CommunityID', 'BrandID' )
+
+			--select @databasename,@TableName,@pk,getdate()
+			--select @databasename, @tablename, @pk
+			insert into ##DeadWoodTables
+			(dbname,schemaname,tablename,searchcol,pk,lvl)
+			select '['+@databasename+']','['+@SchemaName+']','['+@tablename+']',@csv,@pk,0
+
+			EXEC [mnDBA].[dbo].[usp_sp1_getTablesThatHaveColumns] /*@databasename, @tablename,  */@pk,1
+			--'BulkMailTypeID,GroupID,MemberID'
+
+			FETCH NEXT FROM P_Cursor
+		INTO @databasename, @schemaname,@tablename, @pk
+		END
+	CLOSE P_Cursor
+	DEALLOCATE P_Cursor	
+		set @I=@I+1
+end
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt 2]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+/*
+	Process tables with no GroupID column.
+*/
+SET @RowCount = (select COUNT(1) from #TablesWithMemberIDAndNoGroupWithPK)
+SET @I = 1
+
+-- Loop through the rows of a table @myTable
+WHILE (@I <= @RowCount)
+BEGIN
+	DECLARE P_Cursor CURSOR FORWARD_ONLY
+	FOR
+		SELECT --top 1
+				databasename ,
+				schemaname,
+				tablename ,
+				pk
+			FROM
+				#TablesWithMemberIDAndNoGroupWithPK
+			where id=@i
+			--and databasename = 'eporder'
+			--and tablename ='order'
+			--and pk like '%guid%'
+			ORDER BY
+				databasename ,
+				tablename
+	OPEN P_Cursor
+	FETCH NEXT FROM P_Cursor
+	INTO @databasename, @schemaname,@tablename, @pk
+	WHILE @@FETCH_STATUS = 0 
+		BEGIN		
+			--GC: Uncommenting the TRUNCATE TABLE statement so ##ProcessedPKs are not reprocessed repeatedly.
+			--truncate table ##ProcessedPKs
+			
+			set @csv=null
+			select  @csv=coalesce(@csv+',','') +columnname
+			from ##AllTablesColumns where TableName=@TableName and DatabaseName=@databasename and SchemaName=@SchemaName
+			and ColumnName IN ( 'MemberID', 'FromMemberID', 'CustomerID')
+			
+			--select @databasename,@TableName,@pk,getdate()
+			--select @databasename, @tablename, @pk
+			insert into ##DeadWoodTables
+			(dbname,schemaname,tablename,searchcol,pk,lvl)
+			select '['+@databasename+']','['+@SchemaName+']','['+@tablename+']',@csv,@pk,0
+			
+			EXEC [mnDBA].[dbo].[usp_sp1_getTablesThatHaveColumns] /*@databasename, @tablename,  */@pk,1
+			--'BulkMailTypeID,GroupID,MemberID'
+		
+			FETCH NEXT FROM P_Cursor
+		INTO @databasename, @schemaname,@tablename, @pk
+		END
+	CLOSE P_Cursor
+	DEALLOCATE P_Cursor	
+		set @I=@I+1
+end
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt 3]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+/*
+	Delete from ##DeadWoodTables where the searchcol of a table is already included in another record for that table.
+	I.e. epOrder.dbo.Order's CallingSystemID,CustomerID and CallingSystemID,CustomerID,UserPaymentGUID
+*/
+DELETE z FROM (
+	SELECT *
+	FROM ##DeadWoodTables dwt1
+	WHERE CHARINDEX(
+		(	SELECT TOP 1 dwt2.searchcol 
+			FROM ##DeadWoodTables dwt2
+			WHERE dwt2.dbname = dwt1.dbname
+			AND dwt2.schemaname = dwt1.schemaname
+			AND dwt2.tablename = dwt1.tablename
+			AND dwt2.lvl = 0
+		), dwt1.searchcol, 1) > 0
+	AND dwt1.lvl > 0
+) z
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt 4]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+/*
+	GC:
+	BEGIN: Add to ##DeadWoodTables all tables that have MemberID/GroupID, but no primary key.
+*/
+DECLARE P_Cursor2 CURSOR FORWARD_ONLY
+FOR
+	SELECT databasename, schemaname, tablename
+	FROM #TablesWithMemberIDAndGroup
+	WHERE pk IS NULL
+	--AND databasename = 'epOrder'
+	ORDER BY databasename, schemaname, tablename
+
+OPEN P_Cursor2
+
+FETCH NEXT FROM P_Cursor2 INTO @databasename, @schemaname, @tablename
+
+WHILE @@FETCH_STATUS = 0 
+	BEGIN
+	SET @csv=NULL
+	SELECT @csv=COALESCE(@csv+',','') + columnname
+	FROM ##AllTablesColumns
+	WHERE DatabaseName=@databasename AND SchemaName=@SchemaName AND TableName=@TableName
+	AND ColumnName IN ( 'MemberID', 'FromMemberID', 'CustomerID' , 'GroupID', 'CallingSystemID', 'DomainID', 'SiteID', 'CommunityID', 'BrandID' )
+
+	INSERT INTO ##DeadWoodTables (dbname,schemaname,tablename,searchcol,pk,lvl)
+	SELECT '['+@databasename+']', '['+@SchemaName+']', '['+@tablename+']', @csv, NULL, 0
+
+	FETCH NEXT FROM P_Cursor2 INTO @databasename, @schemaname,@tablename
+	END
+
+CLOSE P_Cursor2
+DEALLOCATE P_Cursor2
+/*
+	END: Add to ##DeadWoodTables all tables that have MemberID/GroupID, but no primary key.
+*/
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt 5]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+/* GC:
+	Minimize the SQL commands generated for the mnList databases.
+	Delete table references that have the same value for searchcol and pk, 
+	unless that is the only reference for that table.
+*/
+IF @IncludeTargetsWherePKEqualSearchColumn = 0
+BEGIN
+	IF @Silent=0
+	BEGIN
+		SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+		RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt 6a]', 10, 1, @stars, @now) WITH NOWAIT
+	END
+
+	DELETE a
+    FROM ##DeadWoodTables a
+    JOIN ##DeadWoodTables b
+		ON  a.dbname = b.dbname
+		AND a.schemaname = b.schemaname
+        AND a.tablename = b.tablename
+	WHERE a.searchcol = a.pk
+	AND b.searchcol <> b.pk
+	AND a.pk NOT IN (
+		'MemberID', 'FromMemberID', 'CustomerID',
+		'GroupID,MemberID', 'GroupID,FromMemberID', 'GroupID,CustomerID',
+		'CallingSystemID,MemberID', 'CallingSystemID,FromMemberID', 'CallingSystemID,CustomerID',
+		'DomainID,MemberID', 'DomainID,FromMemberID', 'DomainID,CustomerID',
+		'MemberID,SiteID', 'FromMemberID,SiteID', 'CustomerID,SiteID',
+		'CommunityID,MemberID', 'CommunityID,FromMemberID', 'CommunityID,CustomerID',
+		'BrandID,MemberID', 'BrandID,FromMemberID', 'BrandID,CustomerID'
+	)
+	
+	DELETE a
+    FROM ##DeadWoodTables a
+    JOIN ##DeadWoodTables b
+		ON  a.dbname = b.dbname
+		AND a.schemaname = b.schemaname
+        AND a.tablename = b.tablename
+	WHERE a.searchcol <> a.pk
+	AND b.searchcol = b.pk
+	AND a.pk IN (
+		'MemberID', 'FromMemberID', 'CustomerID',
+		'GroupID,MemberID', 'GroupID,FromMemberID', 'GroupID,CustomerID',
+		'CallingSystemID,MemberID', 'CallingSystemID,FromMemberID', 'CallingSystemID,CustomerID',
+		'DomainID,MemberID', 'DomainID,FromMemberID', 'DomainID,CustomerID',
+		'MemberID,SiteID', 'FromMemberID,SiteID', 'CustomerID,SiteID',
+		'CommunityID,MemberID', 'CommunityID,FromMemberID', 'CommunityID,CustomerID',
+		'BrandID,MemberID', 'BrandID,FromMemberID', 'BrandID,CustomerID'
+	)
+
+	IF @Silent=0
+	BEGIN
+		SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+		RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt 6b]', 10, 1, @stars, @now) WITH NOWAIT
+	END
+END
+
+/*
+	Remove any tables that should not be included.
+*/
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt 7]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+DELETE a
+FROM ##DeadWoodTables a
+JOIN dbo.DeadWoodFilter b
+	ON  a.dbname = '[' + b.DBName + ']'
+	AND a.schemaname = b.SchemaName
+    AND a.tablename = b.TableName
+WHERE b.SchemaName IS NOT NULL
+AND b.TableName IS NOT NULL
+
+DELETE
+FROM ##DeadWoodTables
+WHERE LEFT(tablename, 2) = 'x_'
+OR LEFT(tablename, 3) = '[x_'
+
+/*
+	Correct lvl values where needed.
+*/
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - chkpnt 8]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+/*
+	Final application of exceptions to ##DeadWoodTables
+*/
+UPDATE d
+SET
+	d.pk = e.PrimaryKeys,
+	d.searchcol = e.SearchColumns
+FROM ##DeadWoodTables d INNER JOIN dbo.DeadWoodTargetKeyException e
+	ON '[' + e.DBName1 + ']' = d.DBName
+	AND '[' + e.SchemaName1 + ']' = d.SchemaName
+	AND '[' + e.TableName1 + ']' = d.TableName
+WHERE e.ExceptionAction = 'UPDATE'
+
+UPDATE ##DeadWoodTables
+SET pk = REPLACE(pk, 'MemberID,TargetMemberID', 'MemberID')
+WHERE pk LIKE '%MemberID,TargetMemberID%'
+
+UPDATE ##DeadWoodTables
+SET searchcol = REPLACE(searchcol, 'MemberID,TargetMemberID', 'MemberID')
+WHERE searchcol LIKE '%MemberID,TargetMemberID%'
+
+UPDATE ##DeadWoodTables
+SET pk_searchcol = searchcol
+WHERE pk IS NULL
+
+UPDATE ##DeadWoodTables
+SET pk_searchcol = pk
+WHERE pk IS NOT NULL
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_RunProcess - end]', 10, 1, @stars, @now) WITH NOWAIT
+END

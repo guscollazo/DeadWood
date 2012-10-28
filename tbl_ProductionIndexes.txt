@@ -1,0 +1,11 @@
+USE mnDBA
+GO
+
+CREATE TABLE dbo.ProductionIndexes (
+	ServerName varchar(500) NULL,
+	DatabaseName varchar(500) NULL,
+	TableName varchar(500) NULL,
+	index_name sysname NOT NULL,
+	index_description sysname NOT NULL,
+	index_keys sysname NOT NULL
+) ON [PRIMARY]

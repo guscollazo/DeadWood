@@ -1,0 +1,833 @@
+/*
+@Silent helps with debugging by printing debug statements.
+
+This procedure should be run once before beginning to call up_DeadWood_DeleteMember.
+
+Note: This procedure can take 10-15 minutes to run and generates about 17,659 statements in ##DeadWoodDELETEStatements.
+
+Sample Call: up_DeadWood_MemberOnlySetup @Silent=0
+*/
+ALTER PROCEDURE [dbo].up_DeadWood_MemberOnlySetup
+	@IncludeTargetsWherePKEqualSearchColumn bit = 0		--leave default
+,	@Silent									bit = 1
+AS
+SET NOCOUNT ON
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+
+DECLARE
+	@now						VARCHAR(25) = ''
+,	@stars						VARCHAR(130) = ''
+,   @crlf               		NCHAR(2) = ''
+,   @SQLCmd             		NVARCHAR(MAX) = ''
+,	@DatabaseName				VARCHAR(max) = ''
+,	@TotalDatabaseCount			INT
+,	@cnt          				INT
+,	@GUID						VARCHAR(100) = ''
+,	@ID							INT
+,	@HasTargetMemberID			INT
+,	@HasYNMList					INT
+,	@HasMnList_dbo_mv_D_YNMList INT
+
+SET @stars = REPLICATE('*', 100)
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - start]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+SELECT
+    @crlf = CHAR(13) + CHAR(10)
+,	@GUID = REPLACE(CONVERT(VARCHAR(100), NewID()), '-', '_')
+,	@stars = REPLICATE('*', 100)
+
+IF OBJECT_ID('tempdb..##DeadWoodTables') IS NULL
+BEGIN
+	CREATE TABLE ##DeadWoodTables
+	(
+		dbname sysname not null,
+		schemaname sysname not null, 
+		tablename sysname not null,
+		searchcol VARCHAR(8000),
+		pk varchar(8000),
+		lvl INT,
+		pk_searchcol varchar(8000),
+		ignore BIT
+	)
+	
+	IF @Silent=0
+	BEGIN
+		SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+		RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - ##DeadWoodTables created]', 10, 1, @stars, @now) WITH NOWAIT
+	END
+END
+ELSE
+BEGIN
+	IF @Silent=0
+	BEGIN
+		SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+		RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - ##DeadWoodTables reused]', 10, 1, @stars, @now) WITH NOWAIT
+	END
+END
+
+IF OBJECT_ID('tempdb..#DeadWoodDatabases') IS NOT NULL
+BEGIN
+	DROP TABLE #DeadWoodDatabases
+	
+	IF @Silent=0
+	BEGIN
+		SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+		RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - #DeadWoodDatabases dropped]', 10, 1, @stars, @now) WITH NOWAIT
+	END
+END
+
+CREATE TABLE #DeadWoodDatabases (
+	ID INT IDENTITY,
+	DatabaseName VARCHAR(500)
+)
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - #DeadWoodDatabases created]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+CREATE TABLE #DeadWoodDELETEStatements (
+	ID INT IDENTITY(1,1) NOT NULL,
+	SQLCmd VARCHAR(8000) NOT NULL,
+	DatabaseTableName VARCHAR(1000) NULL
+)
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - #DeadWoodDELETEStatements created]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+IF OBJECT_ID('tempdb..##DeadWoodDELETEStatements') IS NOT NULL
+BEGIN
+	DROP TABLE ##DeadWoodDELETEStatements
+	
+	IF @Silent=0
+	BEGIN
+		SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+		RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - ##DeadWoodDELETEStatements dropped]', 10, 1, @stars, @now) WITH NOWAIT
+	END
+END
+
+CREATE TABLE ##DeadWoodDELETEStatements (
+	ID INT IDENTITY(1,1) NOT NULL,
+	SQLCmd VARCHAR(8000) NOT NULL,
+	DatabaseTableName VARCHAR(1000) NULL
+)
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - ##DeadWoodDELETEStatements created]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+
+
+
+
+SET @SQLCmd = 'CREATE TABLE ##SQL_' + @GUID + ' (SQLCmd VARCHAR(8000), DatabaseTableName VARCHAR(1000))'
+EXEC (@SQLCmd)
+
+
+
+
+
+/*
+	Populating ##DeadWoodTables_bak with "DeadWood targets" as needed.
+*/
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - Refreshing Targets]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+TRUNCATE TABLE ##DeadWoodTables
+TRUNCATE TABLE dbo.DeadWoodTables
+TRUNCATE TABLE dbo.AllTablesColumns
+
+EXEC usp_sp1_RunProcess @IncludeTargetsWherePKEqualSearchColumn=@IncludeTargetsWherePKEqualSearchColumn, @Silent=@Silent
+
+INSERT INTO dbo.DeadWoodTables (dbname, schemaname, tablename, searchcol, pk, lvl, pk_searchcol, ignore)
+SELECT dbname, schemaname, tablename, searchcol, pk, lvl, COALESCE(pk, searchcol), ignore
+FROM ##DeadWoodTables (NOLOCK)
+
+DELETE dbo.DeadWoodTables
+WHERE dbname + schemaname + tablename + searchcol IN (
+	SELECT 
+		'[' + DBName1 + 
+		'][' + SchemaName1 + 
+		'][' + TableName1 +
+		']' + SearchColumns
+	FROM dbo.DeadWoodTargetKeyException
+	WHERE ExceptionAction = 'DELETE'
+)
+
+INSERT INTO dbo.AllTablesColumns (DatabaseName, TableName, SchemaName, ColumnName)
+SELECT DatabaseName, TableName, SchemaName, ColumnName
+FROM ##AllTablesColumns (NOLOCK)
+
+UPDATE STATISTICS dbo.DeadWoodTables WITH FULLSCAN
+UPDATE STATISTICS dbo.DeadWoodTables [IX_DeadwoodTables_1] WITH FULLSCAN
+UPDATE STATISTICS dbo.AllTablesColumns WITH FULLSCAN
+UPDATE STATISTICS dbo.AllTablesColumns [IX_AllTablesColumns_ColumnName_DatabaseName] WITH FULLSCAN
+UPDATE STATISTICS dbo.AllTablesColumns [IX_AllTablesColumns_ColumnName_DatabaseName_TableName] WITH FULLSCAN
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - Done Refreshing Targets]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+
+
+
+
+/*
+	Create statements for TargetMemberID.
+*/
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - Creating TargetMemberID Statements]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+INSERT INTO #DeadWoodDELETEStatements (SQLCmd)
+SELECT '@1@ [' + DatabaseName + '].[' + SchemaName + '].[' + TableName + '] where TargetMemberID = @M@ @2@'
+FROM dbo.AllTablesColumns (NOLOCK)
+WHERE ColumnName = 'TargetMemberID'
+AND DatabaseName NOT IN (
+	'mnImail1', 'mnImail2', 'mnImail3', 'mnImail4', 'mnImail5', 'mnImail6', 'mnImail7', 'mnImail8', 'mnImail9', 'mnImail10', 'mnImail11', 'mnImail12', 
+	'mnImail13', 'mnImail14', 'mnImail15', 'mnImail16', 'mnImail17', 'mnImail18', 'mnImail19', 'mnImail20', 'mnImail21', 'mnImail22', 'mnImail23', 'mnImail24', 
+	'mnList1', 'mnList2', 'mnList3', 'mnList4', 'mnList5', 'mnList6', 'mnList7', 'mnList8', 'mnList9', 'mnList10', 'mnList11', 'mnList12', 
+	'mnList13', 'mnList14', 'mnList15', 'mnList16', 'mnList17', 'mnList18', 'mnList19', 'mnList20', 'mnList21', 'mnList22', 'mnList23', 'mnList24', 
+	'mnMember1', 'mnMember2', 'mnMember3', 'mnMember4', 'mnMember5', 'mnMember6', 'mnMember7', 'mnMember8', 'mnMember9', 'mnMember10', 'mnMember11', 'mnMember12',
+	'mnMember13', 'mnMember14', 'mnMember15', 'mnMember16', 'mnMember17', 'mnMember18', 'mnMember19', 'mnMember20', 'mnMember21', 'mnMember22', 'mnMember23', 'mnMember24'
+)
+AND DatabaseName + '[' + SchemaName + '][' + TableName + ']' NOT IN (
+	SELECT COALESCE(DBName, '') + COALESCE(SchemaName, '') + COALESCE(TableName, '')
+	FROM dbo.DeadWoodFilter (NOLOCK)
+)
+
+INSERT INTO #DeadWoodDELETEStatements (SQLCmd)
+SELECT '@1@ [' + z.DatabaseName + '].[' + z.SchemaName + '].[' + z.TableName + ']' + @crlf + 'WHERE TargetMemberID = @M@ @2@'
+FROM (
+	SELECT DatabaseName, SchemaName, TableName
+	FROM dbo.AllTablesColumns (NOLOCK)
+	WHERE ColumnName = 'TargetMemberID'
+	AND DatabaseName IN (
+		'mnList1', 'mnList2', 'mnList3', 'mnList4', 'mnList5', 'mnList6', 'mnList7', 'mnList8', 'mnList9', 'mnList10', 'mnList11', 'mnList12',
+		'mnList13', 'mnList14', 'mnList15', 'mnList16', 'mnList17', 'mnList18', 'mnList19', 'mnList20', 'mnList21', 'mnList22', 'mnList23', 'mnList24'
+	)
+	--AND REPLACE(DatabaseName, 'mnList', '') = CONVERT(VARCHAR, @mmod)
+	/*
+	AND TableName IN (
+		SELECT 'D' + CONVERT(VARCHAR, dwm.GroupID) + 'YNMList' + CONVERT(VARCHAR, @MemberID % p.PropertyValue)
+		FROM mnSystem.dbo.Property p WITH (NOLOCK) JOIN #DeadWoodMember dwm ON REPLACE(p.[Owner], 'YNMDomainID', '') = CONVERT(VARCHAR, dwm.GroupID)
+		WHERE p.PropertyName = 'AffinityID'
+		AND ISNUMERIC(p.PropertyValue) = 1
+	)
+	*/
+	--AND (
+	--	LEFT(TableName, 9) = 'D' + CONVERT(VARCHAR, @CommunityID) + 'YNMList' OR
+	--	LEFT(TableName, 10) = 'D' + CONVERT(VARCHAR, @CommunityID) + 'YNMList'
+	--)
+	AND DatabaseName + '[' + SchemaName + '][' + TableName + ']' NOT IN (
+		SELECT COALESCE(DBName, '') + COALESCE(SchemaName, '') + COALESCE(TableName, '')
+		FROM dbo.DeadWoodFilter (NOLOCK)
+	)
+) z
+
+INSERT INTO #DeadWoodDELETEStatements (SQLCmd)
+SELECT '@1@ [' + DatabaseName + '].[' + SchemaName + '].[' + TableName + ']' + @crlf +	'WHERE TargetMemberID = @M@ @2@'
+FROM dbo.AllTablesColumns (NOLOCK)
+WHERE ColumnName = 'TargetMemberID'
+AND DatabaseName IN (
+	'mnImail1', 'mnImail2', 'mnImail3', 'mnImail4', 'mnImail5', 'mnImail6', 'mnImail7', 'mnImail8', 'mnImail9', 'mnImail10', 'mnImail11', 'mnImail12',
+	'mnImail13', 'mnImail14', 'mnImail15', 'mnImail16', 'mnImail17', 'mnImail18', 'mnImail19', 'mnImail20', 'mnImail21', 'mnImail22', 'mnImail23', 'mnImail24', 
+	'mnMember1', 'mnMember2', 'mnMember3', 'mnMember4', 'mnMember5', 'mnMember6', 'mnMember7', 'mnMember8', 'mnMember9', 'mnMember10', 'mnMember11', 'mnMember12',
+	'mnMember13', 'mnMember14', 'mnMember15', 'mnMember16', 'mnMember17', 'mnMember18', 'mnMember19', 'mnMember20', 'mnMember21', 'mnMember22', 'mnMember23', 'mnMember24'
+)
+AND DatabaseName + '[' + SchemaName + '][' + TableName + ']' NOT IN (
+	SELECT COALESCE(DBName, '') + COALESCE(SchemaName, '') + COALESCE(TableName, '')
+	FROM dbo.DeadWoodFilter (NOLOCK)
+)
+--AND REPLACE(REPLACE(DatabaseName, 'mnIMail', ''), 'mnMember', '') = CONVERT(VARCHAR, @mmod)
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - Done Creating TargetMemberID Statements]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+
+
+
+
+/*
+	Process the databases that require joins with tables in other databases.
+*/
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - Creating MemberID Statements (A)]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+INSERT INTO #DeadWoodDatabases (DatabaseName)
+SELECT DISTINCT(dwt.dbname)
+FROM dbo.DeadWoodTables dwt (NOLOCK) INNER JOIN dbo.DeadWoodCrossDatabaseJoin dwcdj (NOLOCK) ON dwt.dbname = dwcdj.DBName1
+--WHERE (
+--	LEN(dwt.dbname) > 13
+--	OR
+--	(dwt.dbname NOT LIKE '%mnImail%' AND dwt.dbname NOT LIKE '%mnList%' AND dwt.dbname NOT LIKE '%mnMember%')
+--	OR
+--	REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(dwt.dbname, '[', ''), ']', ''), 'mnImail', ''), 'mnList', ''), 'mnMember', '') = CONVERT(VARCHAR, @mmod)
+--)
+ORDER BY dwt.dbname
+
+SELECT @cnt = 1, @TotalDatabaseCount = COUNT(1) FROM #DeadWoodDatabases
+
+WHILE @cnt <= @TotalDatabaseCount
+BEGIN
+	SELECT @DatabaseName = DatabaseName
+	FROM #DeadWoodDatabases
+	WHERE ID = @cnt
+
+	IF @Silent=0
+	BEGIN
+		SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+		RAISERROR ('%s %s [processing %s (cross-database-join) (%i / %i)]', 10, 1, @stars, @now, @DatabaseName, @cnt, @TotalDatabaseCount) WITH NOWAIT
+	END
+
+	TRUNCATE TABLE ##DeadWoodTables
+	
+	INSERT INTO ##DeadWoodTables (dbname, schemaname, tablename, searchcol, pk, lvl, pk_searchcol, ignore)
+	SELECT DISTINCT dwt.dbname, dwt.schemaname, dwt.tablename, dwt.searchcol, dwt.pk, dwt.lvl, dwt.pk_searchcol, dwt.ignore
+	FROM dbo.DeadWoodTables dwt (NOLOCK)
+	WHERE (
+	dwt.dbname = @DatabaseName
+	OR EXISTS (	SELECT 1 
+				FROM dbo.DeadWoodCrossDatabaseJoin dwcdj (NOLOCK)
+				WHERE dwcdj.DBName1 = @DatabaseName
+				AND dwcdj.DBName2 = dwt.dbname)
+	)
+	--AND (
+	--	LEN(dwt.dbname) > 13
+	--	OR
+	--	(dwt.dbname NOT LIKE '%mnImail%' AND dwt.dbname NOT LIKE '%mnList%' AND dwt.dbname NOT LIKE '%mnMember%')
+	--	OR
+	--	REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(dwt.dbname, '[', ''), ']', ''), 'mnImail', ''), 'mnList', ''), 'mnMember', '') = CONVERT(VARCHAR, @mmod)
+	--)
+
+	EXEC usp_sp1_processes_recursion_Head_MemberOnly @MemberID=1, @Database=@DatabaseName, @GUID=@GUID, @Silent=@Silent
+
+	SET @SQLCmd = 'INSERT INTO #DeadWoodDELETEStatements (SQLCmd, DatabaseTableName) SELECT SQLCmd, DatabaseTableName FROM ##SQL_' + @GUID + '; DELETE ##SQL_' + @GUID
+	EXEC (@SQLCmd)
+	
+	SET @cnt += 1
+END
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - Done Creating MemberID Statements (A)]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+
+
+
+
+/*
+	Process the databases that do NOT require joins with tables in other databases.
+*/
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_DeleteMember - Creating MemberID Statements (B)]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+TRUNCATE TABLE #DeadWoodDatabases
+
+INSERT INTO #DeadWoodDatabases (DatabaseName)
+SELECT z.DBName
+FROM (
+	SELECT DISTINCT
+		dwt.dbname AS DBName,
+		CASE
+		WHEN dwt.dbname LIKE '%mnIMail%' THEN 1
+		WHEN dwt.dbname LIKE '%mnList%' THEN 2
+		WHEN dwt.dbname LIKE '%mnMember%' THEN 3
+		WHEN dwt.dbname = '[epOrder]' OR dwt.dbname = '[epPayment]' THEN 9
+		WHEN dwt.dbname = '[mnMailLog]' THEN 10
+		ELSE 4
+		END AS OrderCol
+	FROM dbo.DeadWoodTables dwt (NOLOCK) LEFT JOIN dbo.DeadWoodCrossDatabaseJoin dwcdj (NOLOCK) ON dwt.dbname = dwcdj.DBName1
+	WHERE dwcdj.DBName1 IS NULL
+	--AND (
+	--	LEN(dwt.dbname) > 13
+	--	OR
+	--	(dwt.dbname NOT LIKE '%mnImail%' AND dwt.dbname NOT LIKE '%mnList%' AND dwt.dbname NOT LIKE '%mnMember%')
+	--	OR
+	--	REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(dwt.dbname, '[', ''), ']', ''), 'mnImail', ''), 'mnList', ''), 'mnMember', '') = CONVERT(VARCHAR, @mmod)
+	--)
+) z
+ORDER BY z.OrderCol, z.DBName
+
+SELECT @cnt = 1, @TotalDatabaseCount = COUNT(1) FROM #DeadWoodDatabases
+
+WHILE @cnt <= @TotalDatabaseCount
+BEGIN
+	SELECT @DatabaseName = DatabaseName
+	FROM #DeadWoodDatabases
+	WHERE ID = @cnt
+	
+	IF @Silent=0
+	BEGIN
+		SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+		RAISERROR ('%s %s [processing %s (%i / %i)]', 10, 1, @stars, @now, @DatabaseName, @cnt, @TotalDatabaseCount) WITH NOWAIT
+	END
+	
+	TRUNCATE TABLE ##DeadWoodTables
+	
+	INSERT INTO ##DeadWoodTables (dbname, schemaname, tablename, searchcol, pk, lvl, pk_searchcol, ignore)
+	SELECT dbname, schemaname, tablename, searchcol, pk, lvl, pk_searchcol, ignore
+	FROM dbo.DeadWoodTables (NOLOCK)
+	WHERE dbname = @DatabaseName
+	
+	EXEC usp_sp1_processes_recursion_Head_MemberOnly @MemberID=1, @Database=@DatabaseName, @GUID=@GUID, @Silent=@Silent
+	
+	SET @SQLCmd = 'INSERT INTO #DeadWoodDELETEStatements (SQLCmd, DatabaseTableName) SELECT SQLCmd, DatabaseTableName FROM ##SQL_' + @GUID + '; DELETE ##SQL_' + @GUID
+	EXEC (@SQLCmd)
+	
+	SET @cnt += 1
+END
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - Done Creating MemberID Statements (B)]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+CREATE INDEX IX_DeadWoodDELETEStatements ON #DeadWoodDELETEStatements (SQLCmd)
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'dbo.DeadWoodMembers', '#DeadWoodMember')
+
+SET @cnt = 1
+WHILE @cnt <= 24
+BEGIN
+	UPDATE #DeadWoodDELETEStatements
+	SET
+		SQLCmd = 
+			REPLACE(
+				REPLACE(
+					REPLACE(SQLCmd, 
+							'[mnMember' + CONVERT(VARCHAR, @cnt) + ']',
+							'[mnMember@MP@]'),
+					'[mnList' + CONVERT(VARCHAR, @cnt) + ']',
+					'[mnList@MP@]'),
+			'[mnIMail' + CONVERT(VARCHAR, @cnt) + ']',
+			'[mnIMail@MP@]'),
+		DatabaseTableName = 
+			REPLACE(
+				REPLACE(
+					REPLACE(DatabaseTableName, 
+							'[mnMember' + CONVERT(VARCHAR, @cnt) + ']',
+							'[mnMember@MP@]'),
+					'[mnList' + CONVERT(VARCHAR, @cnt) + ']',
+					'[mnList@MP@]'),
+			'[mnIMail' + CONVERT(VARCHAR, @cnt) + ']',
+			'[mnIMail@MP@]')
+	WHERE SQLCmd NOT LIKE '%TargetMemberID%'
+	
+	SET @cnt += 1
+END
+
+/*
+	To enhance performance, limit search by FileID to the specific mnFile databases where the FileID value would exist.
+*/
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'GroupID @2@', 'GroupID WHERE (b.FileID % 12) = 0 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile1]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'MultiCommunity=0 @2@', 'MultiCommunity=0 WHERE (b.FileID % 12) = 0 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile1]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'GroupID @2@', 'GroupID WHERE (b.FileID % 12) = 1 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile2]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'MultiCommunity=0 @2@', 'MultiCommunity=0 WHERE (b.FileID % 12) = 1 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile2]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'GroupID @2@', 'GroupID WHERE (b.FileID % 12) = 2 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile3]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'MultiCommunity=0 @2@', 'MultiCommunity=0 WHERE (b.FileID % 12) = 2 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile3]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'GroupID @2@', 'GroupID WHERE (b.FileID % 12) = 3 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile4]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'MultiCommunity=0 @2@', 'MultiCommunity=0 WHERE (b.FileID % 12) = 3 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile4]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'GroupID @2@', 'GroupID WHERE (b.FileID % 12) = 4 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile5]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'MultiCommunity=0 @2@', 'MultiCommunity=0 WHERE (b.FileID % 12) = 4 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile5]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'GroupID @2@', 'GroupID WHERE (b.FileID % 12) = 5 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile6]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'MultiCommunity=0 @2@', 'MultiCommunity=0 WHERE (b.FileID % 12) = 5 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile6]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'GroupID @2@', 'GroupID WHERE (b.FileID % 12) = 6 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile7]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'MultiCommunity=0 @2@', 'MultiCommunity=0 WHERE (b.FileID % 12) = 6 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile7]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'GroupID @2@', 'GroupID WHERE (b.FileID % 12) = 7 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile8]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'MultiCommunity=0 @2@', 'MultiCommunity=0 WHERE (b.FileID % 12) = 7 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile8]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'GroupID @2@', 'GroupID WHERE (b.FileID % 12) = 8 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile9]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'MultiCommunity=0 @2@', 'MultiCommunity=0 WHERE (b.FileID % 12) = 8 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile9]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'GroupID @2@', 'GroupID WHERE (b.FileID % 12) = 9 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile10]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'MultiCommunity=0 @2@', 'MultiCommunity=0 WHERE (b.FileID % 12) = 9 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile10]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'GroupID @2@', 'GroupID WHERE (b.FileID % 12) = 10 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile11]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'MultiCommunity=0 @2@', 'MultiCommunity=0 WHERE (b.FileID % 12) = 10 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile11]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'GroupID @2@', 'GroupID WHERE (b.FileID % 12) = 11 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile12]%'
+
+UPDATE #DeadWoodDELETEStatements
+SET SQLCmd = REPLACE(SQLCmd, 'MultiCommunity=0 @2@', 'MultiCommunity=0 WHERE (b.FileID % 12) = 11 @2@')
+WHERE SQLCmd LIKE '%FileID%'
+AND SQLCmd LIKE '%mnFile12]%'
+
+INSERT INTO ##DeadWoodDELETEStatements (SQLCmd, DatabaseTableName)
+SELECT DISTINCT 
+		REPLACE(
+			REPLACE(
+				REPLACE(
+					REPLACE(
+						REPLACE(
+							REPLACE(
+								REPLACE(
+									REPLACE(
+										REPLACE(
+											REPLACE(
+												REPLACE(
+													REPLACE(
+														REPLACE(
+															REPLACE(
+																REPLACE(
+																	REPLACE(
+																		REPLACE(
+																			REPLACE(
+																				REPLACE(
+																					REPLACE(
+																						REPLACE(
+																							REPLACE(
+																								REPLACE(
+																									REPLACE(
+																										REPLACE(
+																										SQLCmd, 
+																										'#DeadWoodMember24',
+																										'#DeadWoodMember'),
+																									'#DeadWoodMember23',
+																									'#DeadWoodMember'),
+																								'#DeadWoodMember22',
+																								'#DeadWoodMember'),
+																							'#DeadWoodMember21',
+																							'#DeadWoodMember'),
+																						'#DeadWoodMember20',
+																						'#DeadWoodMember'),
+																					'#DeadWoodMember19',
+																					'#DeadWoodMember'),
+																				'#DeadWoodMember18',
+																				'#DeadWoodMember'),
+																			'#DeadWoodMember17',
+																			'#DeadWoodMember'),
+																		'#DeadWoodMember16',
+																		'#DeadWoodMember'),
+																	'#DeadWoodMember15',
+																	'#DeadWoodMember'),
+																'#DeadWoodMember14',
+																'#DeadWoodMember'),
+															'#DeadWoodMember13',
+															'#DeadWoodMember'),
+														'#DeadWoodMember12',
+														'#DeadWoodMember'),
+													'#DeadWoodMember11',
+													'#DeadWoodMember'),
+												'#DeadWoodMember10',
+												'#DeadWoodMember'),
+											'#DeadWoodMember9',
+											'#DeadWoodMember'),
+										'#DeadWoodMember8',
+										'#DeadWoodMember'),
+									'#DeadWoodMember7',
+									'#DeadWoodMember'),
+								'#DeadWoodMember6',
+								'#DeadWoodMember'),
+							'#DeadWoodMember5',
+							'#DeadWoodMember'),
+						'#DeadWoodMember4',
+						'#DeadWoodMember'),
+					'#DeadWoodMember3',
+					'#DeadWoodMember'),
+				'#DeadWoodMember2',
+				'#DeadWoodMember'),
+			'#DeadWoodMember1',
+			'#DeadWoodMember'),
+		'#DeadWoodMember0',
+		'#DeadWoodMember'),
+	DatabaseTableName
+FROM #DeadWoodDELETEStatements
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - end]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+delete ##DeadWoodDELETEStatements where SQLCmd like '%mnMember%List%bak%WHERE%'
+delete ##DeadWoodDELETEStatements where SQLCmd like '%[_]List%' and SQLCmd not like '%YNMList%' and SQLCmd not like '%Altered%'
+delete ##DeadWoodDELETEStatements where SQLCmd like '%List[_]bak%'
+delete ##DeadWoodDELETEStatements where SQLCmd like '%Gift%'
+
+CREATE UNIQUE NONCLUSTERED INDEX IX_TMPDeadWoodDELETEStatements_SQLCmd ON ##DeadWoodDELETEStatements (SQLCmd)
+
+DELETE ##DeadWoodDELETEStatements
+WHERE DatabaseTableName = '[epOrder].[dbo].[OrderDetail]'
+AND (
+	SQLCmd LIKE '%OrderAttributeValue%' OR
+	SQLCmd LIKE '%OrderLock%' OR
+	SQLCmd LIKE '%OrderUserPayment%'
+)
+
+DELETE ##DeadWoodDELETEStatements
+WHERE DatabaseTableName = '[epOrder].[dbo].[OrderAttributeValue]'
+AND (
+	SQLCmd LIKE '%OrderLock%' OR
+	SQLCmd LIKE '%OrderUserPayment%'
+)
+
+DELETE ##DeadWoodDELETEStatements
+WHERE DatabaseTableName = '[epRenewal].[dbo].[RenewalSubscriptionDetail]'
+AND SQLCmd LIKE '%RenewalLock%'
+
+DELETE ##DeadWoodDELETEStatements
+WHERE DatabaseTableName = '[epRenewal].[dbo].[RenewalTransactionDetail]'
+AND SQLCmd LIKE '%RenewalSubscription%'
+
+DELETE ##DeadWoodDELETEStatements
+WHERE DatabaseTableName = '[epOrder].[dbo].[OrderTax]'
+AND SQLCmd LIKE '%OrderLock%'
+
+DELETE ##DeadWoodDELETEStatements
+WHERE DatabaseTableName LIKE '%mnFile%dbo%File%'
+AND SQLCmd LIKE '%AlteredMemberPhoto%'
+
+/*
+	Populate DeadWoodDELETEStatements
+*/
+TRUNCATE TABLE DeadWoodDELETEStatements
+
+INSERT INTO dbo.DeadWoodDELETEStatements (ID, SQLCmd, DatabaseTableName, HasTargetMemberID, HasYNMList, HasMnList_dbo_mv_D_YNMList, FileOnRight, FileRootOnRight, DatabaseTableName_like_mnFile)
+SELECT
+	ID,
+	mnDBA.dbo.fn_PrepareStatement1(
+		SQLCmd, 
+		DatabaseTableName),
+	DatabaseTableName,
+	0,
+	0,
+	0,
+	CASE
+	WHEN RIGHT(DatabaseTableName, 6) = '[File]' THEN 1
+	ELSE 0
+	END,
+	CASE
+	WHEN RIGHT(DatabaseTableName, 10) = '[FileRoot]' THEN 1
+	ELSE 0
+	END,
+	CASE
+	WHEN DatabaseTableName LIKE '%mnFile%' THEN 1
+	ELSE 0
+	END
+FROM ##DeadWoodDELETEStatements
+
+--declare @SQLCmd varchar(8000), @ID INT, @HasTargetMemberID BIT, @HasYNMList BIT, @HasMnList_dbo_mv_D_YNMList BIT
+
+DECLARE cur CURSOR FOR
+SELECT ID, SQLCmd FROM dbo.DeadWoodDELETEStatements
+
+OPEN cur
+FETCH NEXT FROM cur INTO @ID, @SQLCmd
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+	SET @HasTargetMemberID = 0
+	SET @HasYNMList = 0
+	SET @HasMnList_dbo_mv_D_YNMList = 0
+	
+	IF @SQLCmd LIKE '%TargetMemberID%'
+		SET @HasTargetMemberID = 1
+		
+	IF @SQLCmd LIKE '%YNMList%'
+		SET @HasYNMList = 1
+		
+	IF @SQLCmd LIKE '%mnList%dbo%mv%D%YNMList%'
+		SET @HasMnList_dbo_mv_D_YNMList = 1
+		
+	UPDATE dbo.DeadWoodDELETEStatements
+	SET
+		HasTargetMemberID=@HasTargetMemberID,
+		HasYNMList=@HasYNMList,
+		HasMnList_dbo_mv_D_YNMList=@HasMnList_dbo_mv_D_YNMList
+	WHERE [ID] = @ID
+
+	FETCH NEXT FROM cur INTO @ID, @SQLCmd
+END
+
+CLOSE cur
+DEALLOCATE cur
+
+/*
+	Populate DeadWoodDELETEStatements_NotMultiCommunity
+*/
+TRUNCATE TABLE DeadWoodDELETEStatements_NotMultiCommunity
+
+INSERT INTO dbo.DeadWoodDELETEStatements_NotMultiCommunity (
+	ID,
+	SQLCmd,
+	DatabaseTableName,
+	HasTargetMemberID,
+	HasYNMList,
+	HasMnList_dbo_mv_D_YNMList,
+	FileOnRight,
+	FileRootOnRight,
+	DatabaseTableName_like_mnFile
+)
+SELECT
+	ID,
+	mnDBA.dbo.fn_PrepareStatement2(
+		SQLCmd, 
+		0),
+	DatabaseTableName,
+	HasTargetMemberID,
+	HasYNMList,
+	HasMnList_dbo_mv_D_YNMList,
+	FileOnRight,
+	FileRootOnRight,
+	DatabaseTableName_like_mnFile
+FROM dbo.DeadWoodDELETEStatements
+
+/*
+	Populate DeadWoodDELETEStatements_HasTargetMemberID
+*/
+TRUNCATE TABLE dbo.DeadWoodDELETEStatements_HasTargetMemberID
+
+INSERT INTO dbo.DeadWoodDELETEStatements_HasTargetMemberID (
+	ID, SQLCmd, DatabaseTableName, HasTargetMemberID, HasYNMList, HasMnList_dbo_mv_D_YNMList, FileOnRight, FileRootOnRight, DatabaseTableName_like_mnFile, OrderNum
+)
+SELECT
+	ID, SQLCmd, DatabaseTableName, HasTargetMemberID, HasYNMList, HasMnList_dbo_mv_D_YNMList, FileOnRight, FileRootOnRight, DatabaseTableName_like_mnFile,
+	CASE
+	WHEN FileOnRight=1 AND DatabaseTableName_like_mnFile=1 THEN -1000
+	WHEN FileRootOnRight=1 AND DatabaseTableName_like_mnFile=1 THEN -1
+	ELSE 1
+	END
+FROM dbo.DeadWoodDELETEStatements
+WHERE HasTargetMemberID = 1
+ORDER BY ID
+
+/*
+	Populate DeadWoodDELETEStatements_NotMultiCommunity_HasTargetMemberID
+*/
+TRUNCATE TABLE dbo.DeadWoodDELETEStatements_NotMultiCommunity_HasTargetMemberID
+
+INSERT INTO dbo.DeadWoodDELETEStatements_NotMultiCommunity_HasTargetMemberID (
+	ID, SQLCmd, DatabaseTableName, HasTargetMemberID, HasYNMList, HasMnList_dbo_mv_D_YNMList, FileOnRight, FileRootOnRight, DatabaseTableName_like_mnFile, OrderNum
+)
+SELECT
+	ID, SQLCmd, DatabaseTableName, HasTargetMemberID, HasYNMList, HasMnList_dbo_mv_D_YNMList, FileOnRight, FileRootOnRight, DatabaseTableName_like_mnFile,
+	CASE
+	WHEN FileOnRight=1 AND DatabaseTableName_like_mnFile=1 THEN -1000
+	WHEN FileRootOnRight=1 AND DatabaseTableName_like_mnFile=1 THEN -1
+	ELSE 1
+	END
+FROM dbo.DeadWoodDELETEStatements_NotMultiCommunity
+WHERE HasTargetMemberID = 1
+ORDER BY ID
+
+UPDATE DeadWoodDELETEStatements SET DatabaseTableName_like_mnSearchStore = 1 WHERE DatabaseTableName like '%mnSearchStore%'
+UPDATE DeadWoodDELETEStatements SET DatabaseTableName_like_mnSearchStore = 0 WHERE DatabaseTableName_like_mnSearchStore IS NULL
+
+UPDATE DeadWoodDELETEStatements_NotMultiCommunity SET DatabaseTableName_like_mnSearchStore = 1 WHERE DatabaseTableName like '%mnSearchStore%'
+UPDATE DeadWoodDELETEStatements_NotMultiCommunity SET DatabaseTableName_like_mnSearchStore = 0 WHERE DatabaseTableName_like_mnSearchStore IS NULL

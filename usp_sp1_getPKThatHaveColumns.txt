@@ -1,0 +1,50 @@
+USE [mnDBA]
+GO
+/****** Object:  StoredProcedure [dbo].[usp_sp1_getPKThatHaveColumns]    Script Date: 10/26/2011 17:49:57 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+ALTER proc [dbo].[usp_sp1_getPKThatHaveColumns]  (@pk varchar(max),@lvl int)
+as
+begin
+	--print 'IN PK'
+	--select '[usp_sp1_getPKThatHaveColumns] with pk ' + @pk
+	--print @lvl
+
+	declare @sql varchar(max)
+	create table #resultspk (id int identity (1,1) primary key,pk varchar(max))
+	set @sql=
+	'
+	declare @sq varchar(max)
+	select @sq=''select distinct pk from (
+				select (select pk from #PKKEYS p where  a.DatabaseName= p.databasename and a.TableName=p.tablename)as pk From ##AllTablesColumns a inner join  [mnDBA].[dbo].[fn_CSVToTable] (''''' + @pk + ''''') b on b.string=a.ColumnName  
+				--where databasename = ''''eporder''''
+				group by DatabaseName, tablename
+				having count(1) >= (select COUNT(1) from [mnDBA].[dbo].[fn_CSVToTable] (''''' + @pk + ''''') )
+				) t where pk is not null
+				and pk <> ''''' + @pk + '''''
+				and pk is not null
+				order by 1''
+		exec (@sq)
+	'
+	insert into #resultspk
+	exec (@sql)
+	
+	--print @sql
+	
+	DECLARE @RowCount INT,@I INT= 1
+	SET @RowCount = (select COUNT(1) from #resultspk)
+	WHILE (@I <= @RowCount)
+	BEGIN
+			-- Declare variables to hold the data which we get after looping each record
+			declare @key varchar(max)
+			SELECT @key= pk FROM #resultspk WHERE ID = @I
+			exec [usp_sp1_getTablesThatHaveColumns]  @key,@i
+			--print 'CALLING usp_sp1_getTablesThatHaveColumns ' + @key
+			--print @I
+			set @I=@I+1
+	end
+	truncate table #resultspk
+--print 'EXIT PK'
+end

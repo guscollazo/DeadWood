@@ -1,0 +1,143 @@
+CREATE TABLE dbo.DeadWoodDELETEStatements (
+	ID INT NOT NULL,
+	SQLCmd VARCHAR(8000) NULL,
+	DatabaseTableName VARCHAR(8000) NULL,
+	HasTargetMemberID BIT NOT NULL CONSTRAINT DF_DeadWoodDELETEStatements_HasTargetMemberID DEFAULT 0,
+	HasYNMList BIT NOT NULL CONSTRAINT DF_DeadWoodDELETEStatements_HasYNMList DEFAULT 0,
+	HasMnList_dbo_mv_D_YNMList BIT NOT NULL CONSTRAINT DF_DeadWoodDELETEStatements_HasMnList_dbo_mv_D_YNMList DEFAULT 0,
+	FileOnRight BIT NULL,
+	FileRootOnRight BIT NULL,
+	DatabaseTableName_like_mnFile BIT NULL,
+	DatabaseTableName_like_mnSearchStore BIT NULL,
+	CONSTRAINT PK_DeadWoodDELETEStatements PRIMARY KEY CLUSTERED (ID ASC)
+	WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, FILLFACTOR = 90) ON [PRIMARY]
+) ON [PRIMARY]
+GO
+
+CREATE NONCLUSTERED INDEX [IX_DeadWoodDELETEStatements_bits_ID_INC_SQLCmd_DatabaseTableName] ON [dbo].[DeadWoodDELETEStatements] 
+(
+	[HasTargetMemberID] ASC,
+	[HasYNMList] ASC,
+	[HasMnList_dbo_mv_D_YNMList] ASC,
+	[FileOnRight] ASC,
+	[FileRootOnRight] ASC,
+	[DatabaseTableName_like_mnFile] ASC,
+	[DatabaseTableName_like_mnSearchStore] ASC,
+	[ID] ASC
+) INCLUDE ([SQLCmd], [DatabaseTableName])
+WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, IGNORE_DUP_KEY = OFF, DROP_EXISTING = OFF, ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, FILLFACTOR = 90) ON [PRIMARY]
+GO
+
+CREATE NONCLUSTERED INDEX [IX_DeadWoodDELETEStatements_HasTargetMemberID_ID_INC_others] ON [dbo].[DeadWoodDELETEStatements] 
+(
+	[HasTargetMemberID] ASC,
+	[ID] ASC
+)
+INCLUDE (
+	[SQLCmd],
+	[DatabaseTableName],
+	[FileOnRight],
+	[FileRootOnRight],
+	[DatabaseTableName_like_mnFile],
+	[DatabaseTableName_like_mnSearchStore])
+WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, IGNORE_DUP_KEY = OFF, DROP_EXISTING = OFF, ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, FILLFACTOR = 90) ON [PRIMARY]
+GO
+
+CREATE UNIQUE NONCLUSTERED INDEX [IX_DeadWoodDELETEStatements_SQLCmd] ON [dbo].[DeadWoodDELETEStatements] ([SQLCmd] ASC)
+WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, IGNORE_DUP_KEY = OFF, DROP_EXISTING = OFF, ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, FILLFACTOR = 90) ON [PRIMARY]
+GO
+
+
+
+CREATE TABLE dbo.DeadWoodDELETEStatements_NotMultiCommunity (
+	ID INT NOT NULL,
+	SQLCmd VARCHAR(8000) NULL,
+	DatabaseTableName VARCHAR(MAX) NULL,
+	HasTargetMemberID BIT NOT NULL CONSTRAINT DF_DeadWoodDELETEStatements_HasTargetMemberID DEFAULT 0,
+	HasYNMList BIT NOT NULL CONSTRAINT DF_DeadWoodDELETEStatements_HasYNMList DEFAULT 0,
+	HasMnList_dbo_mv_D_YNMList BIT NOT NULL CONSTRAINT DF_DeadWoodDELETEStatements_HasMnList_dbo_mv_D_YNMList DEFAULT 0,
+	FileOnRight BIT NULL,
+	FileRootOnRight BIT NULL,
+	DatabaseTableName_like_mnFile BIT NULL,
+	DatabaseTableName_like_mnSearchStore BIT NULL,
+	CONSTRAINT PK_DeadWoodDELETEStatements_NotMultiCommunity PRIMARY KEY CLUSTERED (ID ASC)
+	WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, FILLFACTOR = 90) ON [PRIMARY]
+) ON [PRIMARY]
+GO
+
+CREATE NONCLUSTERED INDEX [IX_DeadWoodDELETEStatementsNotMultiCommunity_bits_ID_INC_SQLCmd_DatabaseTableName] ON [dbo].[DeadWoodDELETEStatements_NotMultiCommunity] 
+(
+	[HasTargetMemberID] ASC,
+	[HasYNMList] ASC,
+	[HasMnList_dbo_mv_D_YNMList] ASC,
+	[FileOnRight] ASC,
+	[FileRootOnRight] ASC,
+	[DatabaseTableName_like_mnFile] ASC,
+	[DatabaseTableName_like_mnSearchStore] ASC,
+	[ID] ASC
+) INCLUDE ([SQLCmd], [DatabaseTableName])
+WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, IGNORE_DUP_KEY = OFF, DROP_EXISTING = OFF, ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, FILLFACTOR = 90) ON [PRIMARY]
+GO
+
+CREATE NONCLUSTERED INDEX [IX_DeadWoodDELETEStatementsNotMultiCommunity_HasTargetMemberID_ID_INC_others] ON [dbo].[DeadWoodDELETEStatements_NotMultiCommunity] 
+(
+	[HasTargetMemberID] ASC,
+	[ID] ASC
+)
+INCLUDE (
+	[SQLCmd],
+	[DatabaseTableName],
+	[FileOnRight],
+	[FileRootOnRight],
+	[DatabaseTableName_like_mnFile],
+	[DatabaseTableName_like_mnSearchStore])
+WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, IGNORE_DUP_KEY = OFF, DROP_EXISTING = OFF, ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, FILLFACTOR = 90) ON [PRIMARY]
+GO
+
+CREATE UNIQUE NONCLUSTERED INDEX [IX_DeadWoodDELETEStatementsNotMultiCommunity_SQLCmd] ON [dbo].[DeadWoodDELETEStatements_NotMultiCommunity] ([SQLCmd] ASC)
+WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, IGNORE_DUP_KEY = OFF, DROP_EXISTING = OFF, ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, FILLFACTOR = 90) ON [PRIMARY]
+GO
+
+
+
+
+
+
+CREATE TABLE dbo.DeadWoodDELETEStatements_NotMultiCommunity_HasTargetMemberID (
+	ID INT NOT NULL,
+	SQLCmd VARCHAR(8000) NULL,
+	DatabaseTableName VARCHAR(8000) NULL,
+	HasTargetMemberID BIT NOT NULL CONSTRAINT DF_DeadWoodDELETEStatements_HasTargetMemberID DEFAULT 0,
+	HasYNMList BIT NOT NULL CONSTRAINT DF_DeadWoodDELETEStatements_HasYNMList DEFAULT 0,
+	HasMnList_dbo_mv_D_YNMList BIT NOT NULL CONSTRAINT DF_DeadWoodDELETEStatements_HasMnList_dbo_mv_D_YNMList DEFAULT 0,
+	FileOnRight BIT NULL,
+	FileRootOnRight BIT NULL,
+	DatabaseTableName_like_mnFile BIT NULL,
+	OrderNum SMALLINT NULL,
+	CONSTRAINT PK_DeadWoodDELETEStatements_NotMultiCommunity_HasTargetMemberID PRIMARY KEY CLUSTERED (ID ASC)
+	WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, FILLFACTOR = 90) ON [PRIMARY]
+) ON [PRIMARY]
+
+
+
+
+
+
+
+
+
+
+CREATE TABLE dbo.DeadWoodDELETEStatements_HasTargetMemberID (
+	ID INT NOT NULL,
+	SQLCmd VARCHAR(8000) NULL,
+	DatabaseTableName VARCHAR(8000) NULL,
+	HasTargetMemberID BIT NOT NULL CONSTRAINT DF_DeadWoodDELETEStatements_HasTargetMemberID DEFAULT 0,
+	HasYNMList BIT NOT NULL CONSTRAINT DF_DeadWoodDELETEStatements_HasYNMList DEFAULT 0,
+	HasMnList_dbo_mv_D_YNMList BIT NOT NULL CONSTRAINT DF_DeadWoodDELETEStatements_HasMnList_dbo_mv_D_YNMList DEFAULT 0,
+	FileOnRight BIT NULL,
+	FileRootOnRight BIT NULL,
+	DatabaseTableName_like_mnFile BIT NULL,
+	OrderNum SMALLINT NULL,
+	CONSTRAINT PK_DeadWoodDELETEStatements_HasTargetMemberID PRIMARY KEY CLUSTERED (ID ASC)
+	WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, FILLFACTOR = 90) ON [PRIMARY]
+) ON [PRIMARY]

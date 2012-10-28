@@ -1,0 +1,109 @@
+CREATE PROCEDURE dbo.up_DropSpecificProductionIndexes
+AS
+DECLARE @i INT, @j INT, @max INT
+DECLARE @SQLCmd VARCHAR(8000)
+IF OBJECT_ID('tempdb..#SQLCmds') IS NOT NULL
+	DROP TABLE #SQLCmds
+CREATE TABLE #SQLCmds (ID INT IDENTITY(1,1), SQLCmd VARCHAR(8000))
+
+TRUNCATE TABLE #SQLCmds
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnMember#; DROP INDEX MemberAttributeDate.ix_value_INCL_MemberID_AttributeGroupID')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnMember#; DROP INDEX MemberAttributeDate.IX_MemberAttributeDate_AttributeGroupID_INC_MemberID_Value')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnMember#; DROP INDEX MemberPhoto.IX_MemberPhoto_AdminMemberID')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnMember#; DROP INDEX MemberPhoto.IX_MemberPhoto_FileID')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnMember#; DROP INDEX MemberPhoto.IX_MemberPhoto_MemberID_GroupID')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnMember#; DROP INDEX MemberPhoto.IX_MemberPhoto_ThumbFileID')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnMember#; ALTER TABLE dbo.MemberPhoto DROP CONSTRAINT PK_MemberPhoto')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnMember#; DROP INDEX MemberGroup.IX_MemberGroup_GroupID_INC_MemberID')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnMember#; DROP INDEX MemberGroup.IX_MemberGroup_InsertDate')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnMember#; DROP INDEX MemberGroup.IX_MemberGroup_MemberID_GroupID')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnMember#; DROP INDEX MemberGroup.IX_MemberGroup_UpdateDate')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnMember#; DROP INDEX AlteredMember_Date.IX_AlteredMember_Text_Insertdate')
+SELECT @max = MAX(ID) FROM #SQLCmds
+
+SET @i = 1
+WHILE @i <= 24
+BEGIN
+	SET @j = 1
+	WHILE @j <= @max
+	BEGIN
+		SELECT @SQLCmd = REPLACE(SQLCmd, '#', CONVERT(VARCHAR, @i)) FROM #SQLCmds WHERE ID = @j
+		BEGIN TRY
+			RAISERROR ('%s', 10, 1, @SQLCmd) WITH NOWAIT
+			EXEC (@SQLCmd)
+		END TRY
+		BEGIN CATCH
+		END CATCH
+		
+		SET @j += 1
+	END
+	
+	SET @i += 1
+END
+
+TRUNCATE TABLE #SQLCmds
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnFile#; DROP INDEX [File].ix_File_InsertDate')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnFile#; DROP INDEX [File].ix_File_LastListDate')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnFile#; DROP INDEX [File].ix_File_RefCount')
+SELECT @max = MAX(ID) FROM #SQLCmds
+
+SET @i = 1
+WHILE @i <= 12
+BEGIN
+	SET @j = 1
+	WHILE @j <= @max
+	BEGIN
+		SELECT @SQLCmd = REPLACE(SQLCmd, '#', CONVERT(VARCHAR, @i)) FROM #SQLCmds WHERE ID = @j
+		BEGIN TRY
+			RAISERROR ('%s', 10, 1, @SQLCmd) WITH NOWAIT
+			EXEC (@SQLCmd)
+		END TRY
+		BEGIN CATCH
+		END CATCH
+		
+		SET @j += 1
+	END
+	
+	SET @i += 1
+END
+
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE epAccess; DROP INDEX AccessSchedulerTransactionDetail.IX_AccessSchedulerTransactionDetail')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnLogon; DROP INDEX LogonMemberHistory.IX_LogonDate')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnLogon; DROP INDEX LogonMemberHistory.IX_LogonMemberHistory')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnActivityRecording; DROP INDEX Activity.ix_Insertdate')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnAlert; DROP INDEX ViralMailSchedule.IX_NextAttemptDate_LastYesVoteDate_LastSentDate_INCL')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnAlert; DROP INDEX BulkMailSchedule.IX_BulkMailSchedule_LastAttemptDate')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnAlert; DROP INDEX BulkMailSchedule.ix_BulkMailSchedule_NextAttemptDate')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnAlert; DROP INDEX BulkMailSchedule.IX_BulkMailSchedule_ProcessingStatusID_ProcessingStatusDate_INC_InsertDate')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnAlert; DROP INDEX BulkMailSchedule.ix_BulkMailSchedule_SelectID_NextAttemptDate_LastLogonDate')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnLogon; DROP INDEX LogonMember.IX_LogonMember_EmailAddress')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnLogon; DROP INDEX LogonMember.IX_LogonMember_UserName')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnLogon; DROP INDEX LogonMember.IX_UpdateDate')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnXmail; DROP INDEX LogonMember.IX_SMSLog_MemberID_SiteID')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnPhotoStore; DROP INDEX PhotoStore.IX_Insertdate')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnPhotoStore; DROP INDEX PhotoStore.IX_PhotoStore_search1')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnPhotoStore; DROP INDEX PhotoStore.IX_PhotoStore_Search2')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnPhotoStore; DROP INDEX PhotoStore.IX_PhotoStore_search3')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnActivityRecording; DROP INDEX SessionTracking.ix_sessionStart')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnMemberApproval; DROP INDEX MemberTextApprovalHistory.ix_statusdate_communityid_INC_adminmemberid_texttypeid')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnMemberApproval; DROP INDEX MemberTextApprovalHistory.pk_memberid_communityid_languageid_texttypeid_insertdate')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE epOrder; DROP INDEX OrderDetail.IX_OrderDetail_OrderTypeID')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE epOrder; DROP INDEX OrderDetail.IX_OrderID_ItemID')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE epOrder; DROP INDEX OrderDetail.ix_OrderID_packageid_itemid')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE epRenewal; DROP INDEX RenewalTransaction.IX_RenewalTransaction_RenewalSubscriptionID_INC_RenewalTransactionID')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE epRenewal; DROP INDEX RenewalTransaction.ix_ExternalTransactionID')
+INSERT INTO #SQLCmds (SQLCmd) VALUES ('USE mnFileExchange; DROP INDEX BulkMail.BulkMailTypeID_InsertDate')
+
+SELECT @j = 1, @max = MAX(ID) FROM #SQLCmds
+WHILE @j <= @max
+BEGIN
+	SELECT @SQLCmd = SQLCmd FROM #SQLCmds WHERE ID = @j
+	BEGIN TRY
+		RAISERROR ('%s', 10, 1, @SQLCmd) WITH NOWAIT
+		EXEC (@SQLCmd)
+	END TRY
+	BEGIN CATCH
+	END CATCH
+	
+	SET @j += 1
+END

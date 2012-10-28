@@ -1,0 +1,575 @@
+USE [mnDBA]
+GO
+/****** Object:  StoredProcedure [dbo].[usp_sp1_processes_recursion_Head_MemberOnly]    Script Date: 10/26/2011 17:48:59 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+ALTER PROCEDURE [dbo].[usp_sp1_processes_recursion_Head_MemberOnly]
+	@MemberID INT,
+	@Database VARCHAR(500) = NULL,
+	@LineItemPerformanceChecks BIT = 0,
+	@GUID VARCHAR(100) = NULL,
+	@Silent BIT = 0
+as
+set nocount on
+DECLARE @dbname sysname,@schemaname sysname,@tablename sysname, @searchcol varchar(max),@lvl int,@char int =0,@finalstring varchar(max),@tablenameout varchar(max)
+DECLARE @dbname2 sysname,@schemaname2 sysname,@tablename2 sysname, @pk varchar(max),@searchcol2 varchar(max), @lvl2 int
+DECLARE @now VARCHAR(25), @stars VARCHAR(130), @alternate_pk VARCHAR(MAX), @partition VARCHAR(2), @mainpartition VARCHAR(2), @tmp VARCHAR(1000)
+DECLARE @MaxMemberIDs TABLE (PartitionID INT IDENTITY(1,1), MinMemberID INT, MaxMemberID INT)
+DECLARE @MemberIDRanges TABLE (PartitionID INT, StartMemberID INT, EndMemberID INT)
+
+SET @stars = REPLICATE('*', 100)
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_processes_recursion_Head_MemberOnly - start]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+IF OBJECT_ID('tempdb..#deletestatement') IS NOT NULL
+    DROP TABLE #deletestatement
+
+create table #deletestatement (cmd varchar(max) not NULL, cmd2 varchar(max) null, tablename varchar(500) null, DatabaseTableName varchar(1000) null)
+
+declare @sql varchar(max),@sql2 varchar(max), @crlf char(2), @guid2 varchar(40), @guid3 varchar(100)
+declare @i int, @ii int, @rc int, @max int, @cnt int, @MinMemberID int, @MaxMemberID int
+--set @cnt = 0
+set @crlf = CHAR(13) + CHAR(10)
+set @guid2 = CONVERT(VARCHAR(40), NEWID())
+set @guid3 = CONVERT(VARCHAR(40), NEWID())
+--GC: @max used to track progress of this procedure.
+select @i=MAX(lvl), @max=COUNT(1) from ##DeadWoodTables
+--GC: Find the DeadwoodStatus record that will need updating
+--select top 1 @status_guid = [GUID] from dbo.DeadWoodStatus order by InsertDate desc
+
+--UPDATE dbo.DeadWoodStatus
+--SET ProcessedDeletionTables = 0, TotalDeletionTables = @max
+--WHERE [guid] = @status_guid
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_processes_recursion_Head_MemberOnly - 1]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+while @i >= 0
+begin
+
+	IF @Silent=0
+	BEGIN
+		SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+		RAISERROR ('%s %s %i [usp_sp1_processes_recursion_Head_MemberOnly - 2]', 10, 1, @stars, @now, @i) WITH NOWAIT
+	END
+
+	--print @i
+	DECLARE P_Cursor CURSOR FORWARD_ONLY
+	FOR
+		--GC: When pk is unavailable, use searchcol. @Database allows filtering to process 1 specific database.
+		select DISTINCT dbname,schemaname,tablename,searchcol,pk_searchcol,lvl from ##DeadWoodTables where lvl=@i 
+			AND (dbname=@Database OR @Database IS NULL)
+	OPEN P_Cursor
+	FETCH NEXT FROM P_Cursor
+	INTO @dbname,@schemaname,@tablename,@searchcol,@pk,@lvl
+	WHILE @@FETCH_STATUS = 0
+	BEGIN
+		IF @Silent=0
+		BEGIN
+			SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+			RAISERROR ('%s %s --- %s %s %s %s %s %i [usp_sp1_processes_recursion_Head_MemberOnly - 3]', 10, 1, @stars, @now, @dbname, @schemaname, @tablename, @searchcol, @pk, @lvl) WITH NOWAIT
+		END
+
+		--GC: Added @@pk. Any table where @pk is MemberID or GroupID,MemberID is effectively lvl 0.
+		if @i=0 or @pk IN (
+			'MemberID', 'FromMemberID', 'CustomerID',
+			'GroupID,MemberID', 'GroupID,FromMemberID', 'GroupID,CustomerID',
+			'CallingSystemID,MemberID', 'CallingSystemID,FromMemberID', 'CallingSystemID,CustomerID',
+			'DomainID,MemberID', 'DomainID,FromMemberID', 'DomainID,CustomerID',
+			'MemberID,SiteID', 'FromMemberID,SiteID', 'CustomerID,SiteID',
+			'CommunityID,MemberID', 'CommunityID,FromMemberID', 'CommunityID,CustomerID',
+			'BrandID,MemberID', 'BrandID,FromMemberID', 'BrandID,CustomerID'
+		) or @searchcol IN (
+			'MemberID', 'FromMemberID', 'CustomerID',
+			'GroupID,MemberID', 'GroupID,FromMemberID', 'GroupID,CustomerID',
+			'CallingSystemID,MemberID', 'CallingSystemID,FromMemberID', 'CallingSystemID,CustomerID',
+			'DomainID,MemberID', 'DomainID,FromMemberID', 'DomainID,CustomerID',
+			'MemberID,SiteID', 'FromMemberID,SiteID', 'CustomerID,SiteID',
+			'CommunityID,MemberID', 'CommunityID,FromMemberID', 'CommunityID,CustomerID',
+			'BrandID,MemberID', 'BrandID,FromMemberID', 'BrandID,CustomerID'
+		)
+		begin
+			IF @Silent=0
+			BEGIN
+				SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+				RAISERROR ('%s %s [usp_sp1_processes_recursion_Head_MemberOnly - 4a]', 10, 1, @stars, @now) WITH NOWAIT
+			END
+			
+			if charindex('[',@dbname) = 0
+				select @dbname='['+@dbname+']'
+			if charindex('[',@schemaname) = 0					
+				select @schemaname='['+@schemaname+']'
+			if charindex('[',@tablename) = 0					
+				select @tablename='['+@tablename+']'
+			if charindex('[',@dbname2) = 0
+				select @dbname2='['+@dbname2+']'
+			if charindex('[',@schemaname2) = 0					
+				select @schemaname2='['+@schemaname2+']'
+			if charindex('[',@tablename2) = 0					
+				select @tablename2='['+@tablename2+']'
+				
+			--GC: If @PK is null, then use a WHILE loop to delete one row at a time.
+			--GC: Actually, the WHILE loop is now used for all queries.
+			--GC: Statements are now inserted to dbo.DeadWoodSQLStatements
+			--GC: For MemberPhoto, deletion output is written to dbo.DeadWoodDeletionOutput
+			set @sql=''
+			IF @tablename = '[MemberPhoto]'
+			BEGIN
+				IF @Silent=0
+				BEGIN				
+					RAISERROR ('----A %s', 10, 1, @sql) WITH NOWAIT
+				END
+				
+				set @sql+='@1@ '
+				set @sql+=' @OUTPUT@ '''+@@SERVERNAME+''', '''+@dbname+''', '''+@tablename
+
+				IF @Silent=0
+				BEGIN				
+					RAISERROR ('----B %s', 10, 1, @sql) WITH NOWAIT
+				END
+
+				set @sql+=''', deleted.FileWebPath, deleted.ThumbFileWebPath INTO dbo.DeadWoodDeletionOutput (MemberID, ServerName, DBName, TableName, FileWebPath, ThumbFileWebPath) FROM '
+				set @sql+=@dbname+'.'+@schemaname+'.'+@tablename+' a'
+
+				IF @Silent=0
+				BEGIN				
+					RAISERROR ('----C %s', 10, 1, @searchcol) WITH NOWAIT
+				END
+
+				set @sql+=' JOIN #DeadWoodMember b (nolock) on ' + [mnDBA].[dbo].[fn_CommaSeparatedListTOJoinList3] (COALESCE([mnDBA].[dbo].[fn_CSVToTable_Clear_csv] (@searchcol), @searchcol))
+
+				IF @Silent=0
+				BEGIN				
+					RAISERROR ('----D %s', 10, 1, @sql) WITH NOWAIT
+				END
+			END
+			ELSE
+			BEGIN
+				set @sql+='@1@ '
+				set @sql+=@dbname+'.'+@schemaname+'.'+@tablename+' b (nolock) '
+				set @sql+=' join #DeadWoodMember a (nolock) on ' + [mnDBA].[dbo].[fn_CommaSeparatedListTOJoinList3] (COALESCE([mnDBA].[dbo].[fn_CSVToTable_Clear_csv] (@searchcol), @searchcol))
+			END
+						
+			IF RIGHT(@sql, 22) = 'AND b.MultiCommunity=0'
+			BEGIN
+				SET @sql = REPLACE(@sql, '@@@', 'NoMultiCommunity')
+				SET @sql = REPLACE(@sql, 'AND b.MultiCommunity=0', '')
+			END
+			ELSE
+			BEGIN
+				SET @sql = REPLACE(@sql, '@@@', '')
+			END
+				
+			IF @tablename LIKE '%YNMList%'
+			BEGIN
+				SET @sql = REPLACE(@sql, 'NoMultiCommunity', '')
+			END
+			
+			/*
+				Ensure that no recursive SELECT statements are created for this table which has "MemberID" and "GroupID".
+			*/
+			DELETE #deletestatement WHERE tablename = @tablename
+			
+			IF @sql IS NOT NULL
+			BEGIN
+				insert into #deletestatement (cmd, tablename, DatabaseTableName)
+				select @sql, @tablename, @dbname+'.'+@schemaname+'.'+@tablename
+			END
+				
+			--GC: If SQL statement includes FromMemberID, then add another statement for ToMemberID.
+			IF CHARINDEX('FromMemberID', @sql, 1) > 0
+			BEGIN
+				SET @sql2 = REPLACE(@sql, 'FromMemberID', 'ToMemberID')
+
+				IF @sql2 IS NOT NULL
+				BEGIN
+					insert into #deletestatement (cmd, tablename, DatabaseTableName)
+					select @sql2, @tablename, @dbname+'.'+@schemaname+'.'+@tablename
+				END
+			END
+			
+			IF @Silent=0
+			BEGIN
+				SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+				RAISERROR ('%s %s [usp_sp1_processes_recursion_Head_MemberOnly - 4b]', 10, 1, @stars, @now) WITH NOWAIT
+			END
+		end
+		else
+		begin
+			IF @Silent=0
+			BEGIN
+				SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+				RAISERROR ('%s %s [usp_sp1_processes_recursion_Head_MemberOnly - 5a]', 10, 1, @stars, @now) WITH NOWAIT
+			END
+
+			DECLARE P_Cursor2 CURSOR FORWARD_ONLY
+			FOR 
+				--GC: If PK is simply MemberID, then there is no reason to add any JOIN except to ##MembersToDelete.
+				--select DISTINCT dbname,schemaname,tablename,@pk,searchcol,lvl from ##DeadWoodTables where lvl=@i-1 and pk=@searchcol and pk <> 'MemberID'
+				--GC: @i-1 was filtering out potential matches. Using <@i instead.
+				--GC: When pk is unavailable, use searchcol.
+				--GC: For now, limit searching for other tables within the same database as our target table.
+				--select DISTINCT dbname,schemaname,tablename,@pk,searchcol,lvl from ##DeadWoodTables where lvl<=@i and pk=@searchcol and pk <> 'MemberID'
+				SELECT DISTINCT dwt.dbname, dwt.schemaname, dwt.tablename, @pk, dwt.searchcol, dwt.lvl
+				FROM ##DeadWoodTables dwt
+				WHERE dwt.lvl <= @i
+				AND dwt.pk_searchcol = @searchcol
+				AND dwt.pk_searchcol <> 'MemberID'
+				AND dwt.tablename <> @tablename
+				AND (
+					dwt.dbname = @dbname
+					OR
+					EXISTS (SELECT 1 FROM dbo.DeadWoodCrossDatabaseJoin WHERE DBName1 = @dbname AND DBName2 = dwt.dbname)
+				)
+			OPEN P_Cursor2
+			FETCH NEXT FROM P_Cursor2
+			INTO @dbname2,@schemaname2,@tablename2,@pk,@searchcol2,@lvl2
+			WHILE @@FETCH_STATUS = 0
+			BEGIN
+				IF @Silent=0
+				BEGIN
+					SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+					RAISERROR ('%s %s %s %s %s %s %s %s %i [usp_sp1_processes_recursion_Head_MemberOnly - 6a]', 10, 1, @stars, @now, @dbname, @dbname2, @schemaname2, @tablename2, @pk, @searchcol2, @lvl2) WITH NOWAIT
+				END
+
+				if charindex('[',@dbname) = 0
+					select @dbname='['+@dbname+']'
+				if charindex('[',@schemaname) = 0					
+					select @schemaname='['+@schemaname+']'
+				if charindex('[',@tablename) = 0					
+					select @tablename='['+@tablename+']'
+				if charindex('[',@dbname2) = 0
+					select @dbname2='['+@dbname2+']'
+				if charindex('[',@schemaname2) = 0					
+					select @schemaname2='['+@schemaname2+']'
+				if charindex('[',@tablename2) = 0					
+					select @tablename2='['+@tablename2+']'
+
+				--GC: Statements are now inserted to dbo.DeadWoodSQLStatements
+				--GC: For MemberPhoto, deletion output is written to dbo.DeadWoodDeletionOutput
+				set @sql=''
+				IF @tablename = '[MemberPhoto]'
+				BEGIN
+					set @sql+='@1@ '
+					set @sql+=' @OUTPUT@ '''+@@SERVERNAME+''', '''+@dbname+''', '''+@tablename
+					set @sql+=''', deleted.FileWebPath, deleted.ThumbFileWebPath INTO dbo.DeadWoodDeletionOutput (MemberID, ServerName, DBName, TableName, FileWebPath, ThumbFileWebPath) FROM '
+					set @sql+=@dbname+'.'+@schemaname+'.'+@tablename+' a'
+					set @sql+=' JOIN '+@dbname2+'.'+@schemaname2+'.'+@tablename2+' b (NOLOCK) ON ' +mnDBA.dbo.fn_CommaSeparatedListTOJoinList3 (@searchcol)
+				END
+				ELSE
+				BEGIN
+					IF @Silent=0
+					BEGIN
+						RAISERROR ('------C %s', 10, 1, @tablename) WITH NOWAIT
+					END
+					
+					SET @alternate_pk = NULL
+					
+					IF EXISTS (
+						SELECT 1
+						FROM dbo.DeadWoodTargetKeyException
+						WHERE DBName1 = @dbname
+						AND ExceptionAction = 'ALTER JOIN'
+					)
+					BEGIN
+						SELECT TOP 1 @alternate_pk = PrimaryKeys
+						FROM dbo.DeadWoodTargetKeyException
+						WHERE DBName1 = @dbname
+						AND SchemaName1 = @schemaname
+						AND TableName1 = @tablename
+						AND DBName2 = @dbname
+						AND SchemaName2 = @schemaname
+						AND TableName2 = @tablename2
+						AND ExceptionAction = 'ALTER JOIN'
+					END
+					
+					IF @Silent=0
+					BEGIN
+						RAISERROR ('------D %s', 10, 1, @alternate_pk) WITH NOWAIT
+					END
+													
+					set @sql+='@1@ '
+					set @sql+=@dbname+'.'+@schemaname+'.'+@tablename+' a (nolock) join '+@dbname2+'.'+@schemaname2+'.'+@tablename2+' b (nolock) on ' +mnDBA.dbo.fn_CommaSeparatedListTOJoinList3 (COALESCE(@alternate_pk, @searchcol))
+					
+					IF @Silent=0
+					BEGIN
+						RAISERROR ('------E %s', 10, 1, @sql) WITH NOWAIT
+					END
+				END
+
+				IF @Silent=0
+				BEGIN				
+					SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+					RAISERROR ('%s %s [usp_sp1_processes_recursion_Head_MemberOnly - 6b] %s %s %s', 10, 1, @stars, @now, @tablename, @tablename2, @searchcol2) WITH NOWAIT
+				END
+
+				--GC: This would prevent OrderDetail from joining with Order which are at the same level in ##DeadWoodTables (lvl=1).
+				--set @lvl2=@i-1
+				insert into #deletestatement (cmd)
+				EXECUTE mnDBA.dbo.usp_sp1_processes_recursion_MemberOnly
+				   @sql
+				  ,@lvl2
+				  ,@dbname2
+				  ,@tablename2
+				  ,@searchcol2
+				  ,@char
+				  ,@Silent
+				  --,@finalstring OUTPUT
+				  --,@tablenameout output
+				  
+				update #deletestatement
+				set
+					tablename = @tablename,
+					DatabaseTableName = @dbname+'.'+@schemaname+'.'+@tablename				
+				where tablename is null
+				
+				IF @Silent=0
+				BEGIN
+					SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+					RAISERROR ('%s %s [usp_sp1_processes_recursion_Head_MemberOnly - 6c]', 10, 1, @stars, @now) WITH NOWAIT
+				END
+				  
+				--GC: If SQL statement includes FromMemberID, then add another statement for ToMemberID.
+				IF CHARINDEX('FromMemberID', @sql, 1) > 0
+				BEGIN
+					SET @sql2 = REPLACE(@sql, 'FromMemberID', 'ToMemberID')
+
+					insert into #deletestatement (cmd)
+					EXECUTE  mnDBA.dbo.usp_sp1_processes_recursion_MemberOnly
+					   @sql2
+					  ,@lvl2
+					  ,@dbname2
+					  ,@tablename2
+					  ,@searchcol2
+					  ,@char
+					  ,@Silent
+
+					update #deletestatement
+					set
+						tablename = @tablename,
+						DatabaseTableName = @dbname+'.'+@schemaname+'.'+@tablename				
+					where tablename is null
+				END
+
+				/*
+					Remove any sql statements where the same table is joined more than once.
+				*/
+				DELETE #deletestatement
+				WHERE CHARINDEX(@dbname + '.' + @schemaname + '.' + @tablename + ' ', cmd, 250) > 0
+				AND CHARINDEX(@dbname + '.' + @schemaname + '.' + @tablename + ' ', cmd, CHARINDEX(@dbname + '.' + @schemaname + '.' + @tablename, cmd, 250)+30) > 0
+				
+				FETCH NEXT FROM P_Cursor2
+				INTO @dbname2,@schemaname2,@tablename2,@pk,@searchcol2,@lvl2
+
+				IF @Silent=0
+				BEGIN
+					SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+					RAISERROR ('%s %s [usp_sp1_processes_recursion_Head_MemberOnly - 6d]', 10, 1, @stars, @now) WITH NOWAIT
+				END
+			END
+			CLOSE P_Cursor2
+			DEALLOCATE P_Cursor2
+			
+			IF @Silent=0
+			BEGIN
+				SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+				RAISERROR ('%s %s [usp_sp1_processes_recursion_Head_MemberOnly - 5b]', 10, 1, @stars, @now) WITH NOWAIT
+			END
+		end
+	FETCH NEXT FROM P_Cursor
+	INTO @dbname,@schemaname,@tablename,@searchcol,@pk,@lvl
+	END
+	CLOSE P_Cursor
+	DEALLOCATE P_Cursor	
+set @i=@i-1
+end
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_processes_recursion_Head_MemberOnly - chkpnt A]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+/*
+	Any records with # must be replaced with 24 copies of the same statement for each of the 24 tables.
+	Unless @Database is mnImail#, mnList#, or mnMember#, then it only uses # instead of all 24 numbers.
+*/
+SET @mainpartition = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(@Database, '[', ''), ']', ''), 'mnImail', ''), 'mnList', ''), 'mnMember', '')
+IF ISNUMERIC(@mainpartition)=1
+BEGIN
+	UPDATE #deletestatement SET cmd = REPLACE(cmd, '#', @mainpartition)
+	UPDATE #deletestatement SET cmd = REPLACE(cmd, @mainpartition+'DeadWoodMember', '#DeadWoodMember')
+END
+ELSE
+BEGIN
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '24')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail24%' OR cmd LIKE '%mnMember24%' OR cmd LIKE '%mnList24%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '23')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail23%' OR cmd LIKE '%mnMember23%' OR cmd LIKE '%mnList23%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '22')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail22%' OR cmd LIKE '%mnMember22%' OR cmd LIKE '%mnList22%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '21')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail21%' OR cmd LIKE '%mnMember21%' OR cmd LIKE '%mnList21%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '20')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail20%' OR cmd LIKE '%mnMember20%' OR cmd LIKE '%mnList20%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '19')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail19%' OR cmd LIKE '%mnMember19%' OR cmd LIKE '%mnList19%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '18')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail18%' OR cmd LIKE '%mnMember18%' OR cmd LIKE '%mnList18%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '17')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail17%' OR cmd LIKE '%mnMember17%' OR cmd LIKE '%mnList17%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '16')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail16%' OR cmd LIKE '%mnMember16%' OR cmd LIKE '%mnList16%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '15')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail15%' OR cmd LIKE '%mnMember15%' OR cmd LIKE '%mnList15%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '14')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail14%' OR cmd LIKE '%mnMember14%' OR cmd LIKE '%mnList14%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '13')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail13%' OR cmd LIKE '%mnMember13%' OR cmd LIKE '%mnList13%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '12')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail12%' OR cmd LIKE '%mnMember12%' OR cmd LIKE '%mnList12%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '11')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail11%' OR cmd LIKE '%mnMember11%' OR cmd LIKE '%mnList11%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '10')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail10%' OR cmd LIKE '%mnMember10%' OR cmd LIKE '%mnList10%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '9')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail9%' OR cmd LIKE '%mnMember9%' OR cmd LIKE '%mnList9%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '8')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail8%' OR cmd LIKE '%mnMember8%' OR cmd LIKE '%mnList8%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '7')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail7%' OR cmd LIKE '%mnMember7%' OR cmd LIKE '%mnList7%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '6')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail6%' OR cmd LIKE '%mnMember6%' OR cmd LIKE '%mnList6%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '5')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail5%' OR cmd LIKE '%mnMember5%' OR cmd LIKE '%mnList5%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '4')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail4%' OR cmd LIKE '%mnMember4%' OR cmd LIKE '%mnList4%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '3')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail3%' OR cmd LIKE '%mnMember3%' OR cmd LIKE '%mnList3%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '2')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail2%' OR cmd LIKE '%mnMember2%' OR cmd LIKE '%mnList2%')
+	
+	UPDATE #deletestatement
+	SET cmd = REPLACE(cmd, '#', '1')
+	WHERE cmd LIKE '%#%'
+	AND (cmd LIKE '%mnImail1%' OR cmd LIKE '%mnMember1%' OR cmd LIKE '%mnList1%')
+
+	UPDATE #deletestatement SET cmd = REPLACE(cmd, 'DeadWoodMembersNoMultiCommunity#', '#DeadWoodMember')
+	UPDATE #deletestatement SET cmd = REPLACE(cmd, 'DeadWoodMembers#', '#DeadWoodMember')
+END
+
+/*
+	Remove any statements that insert into tables that should be ignored.
+*/
+--DELETE #deletestatement
+--WHERE LEFT(cmd, 280) LIKE '%MemberPhoto%'
+--AND CHARINDEX('OUTPUT', cmd, 1) > 0
+--AND SUBSTRING(cmd, CHARINDEX('top (1)', cmd, 1) + 8, CHARINDEX('OUTPUT', cmd, 1) - CHARINDEX('top (1)', cmd, 1) - 9) IN (
+--	SELECT dbname + '.' + schemaname + '.' + tablename
+--	FROM ##DeadWoodTables
+--	WHERE ignore = 1
+--)
+
+--DELETE #deletestatement
+--WHERE LEFT(cmd, 280) NOT LIKE '%MemberPhoto%'
+--AND SUBSTRING(cmd, CHARINDEX('top (1)', cmd, 1) + 8, CHARINDEX('where', cmd, 1) - CHARINDEX('top (1)', cmd, 1) - 9) IN (
+--	SELECT dbname + '.' + schemaname + '.' + tablename
+--	FROM ##DeadWoodTables
+--	WHERE ignore = 1
+--)
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [usp_sp1_processes_recursion_Head_MemberOnly - chkpnt B]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+SET @SQL = '
+	INSERT INTO ##SQL_' + @GUID + ' (SQLCmd, DatabaseTableName)
+	SELECT DISTINCT cmd + '' @2@'', DatabaseTableName
+	FROM #deletestatement (NOLOCK)'
+--	WHERE cmd LIKE ''%DeadWoodMembers' + CONVERT(VARCHAR, ((@MemberID%24)+1)) + '%''
+--	OR cmd NOT LIKE ''%DeadWoodMembers%'''
+EXEC (@SQL)
+
+IF @Silent=0
+BEGIN
+		SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+		RAISERROR ('%s %s [usp_sp1_processes_recursion_Head_MemberOnly - end]', 10, 1, @stars, @now) WITH NOWAIT
+END

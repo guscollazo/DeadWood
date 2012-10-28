@@ -1,0 +1,32 @@
+CREATE FUNCTION [dbo].[fn_CommaSeparatedListTOJoinList3]
+(
+	@CommaSeparatedList VARCHAR(max)
+)
+RETURNS VARCHAR(2000)
+AS
+BEGIN
+DECLARE @i INT, @rtnvalue VARCHAR(2000), @col VARCHAR(1000)
+
+SET @i = 1
+SET @rtnvalue = ''
+
+WHILE @i > 0
+BEGIN
+	SET @i = CHARINDEX(',', @CommaSeparatedList, @i)
+	IF @i > 0
+	BEGIN
+		SET @col = LEFT(@CommaSeparatedList, @i-1)
+		
+		--SET @rtnvalue += 'a.' + LEFT(@CommaSeparatedList, @i-1) + '=b.' + @col + ' AND '
+		SET @rtnvalue += 'b.[' + @col + '] = a.[' + @col + ']' + ' AND '
+		
+		SET @CommaSeparatedList = LTRIM(RTRIM(SUBSTRING(@CommaSeparatedList, @i+1, 1000)))
+		SET @i =1
+	END
+END
+SET @col = @CommaSeparatedList
+
+--SET @rtnvalue += 'a.' + @CommaSeparatedList + '=b.' + @col
+SET @rtnvalue += 'a.[' + @col + '] =b.[' + @col + ']'
+RETURN @rtnvalue
+END

@@ -1,0 +1,32 @@
+ALTER PROCEDURE dbo.up_DeadWood_ProcessOrphans
+	@Silent	BIT = 1
+AS
+SET NOCOUNT ON
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+
+DECLARE
+	@ID			INT
+,	@Max		INT
+,	@MemberID	INT
+,	@GroupID	INT
+,	@Year		INT
+
+SELECT @ID = 1, @Max = MAX(ID) FROM dbo.DeadWoodOrphans
+
+WHILE @ID <= @Max
+BEGIN
+	SELECT @MemberID=MemberID, @GroupID=GroupID, @Year=[Year]
+	FROM dbo.DeadWoodOrphans
+	WHERE ID=@ID
+
+	EXEC up_DeadWood_DeleteMember5
+		@MemberID=@MemberID
+	,	@CommunityID=@GroupID
+	,	@Operation='Delete Everything'
+	,	@DeleteTop='50'
+	,	@Silent=@Silent
+	
+	INSERT INTO dbo.MembersDeadwooded (MemberID, CommunityID, [Year]) VALUES (@MemberID, @GroupID, @Year)
+	
+	SET @ID += 1
+END

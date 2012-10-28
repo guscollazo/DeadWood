@@ -1,0 +1,121 @@
+USE [mnDBA]
+GO
+/****** Object:  StoredProcedure [dbo].[up_DeadWood_MemberOnlySetup]    Script Date: 10/26/2011 17:46:14 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+/*
+@Silent helps with debugging by printing debug statements.
+
+This procedure should be run once before beginning to call up_DeadWood_DeleteMember
+
+Sample Call: up_DeadWood_MemberOnlySetup @Silent=0
+*/
+ALTER PROCEDURE [dbo].[up_DeadWood_MemberOnlySetup]
+	@IncludeTargetsWherePKEqualSearchColumn bit = 0		--leave default
+,	@Silent									bit = 1
+AS
+SET NOCOUNT ON
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+
+DECLARE
+	@now						VARCHAR(25) = ''
+,	@stars						VARCHAR(130) = ''
+
+SET @stars = REPLICATE('*', 100)
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - start]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+IF OBJECT_ID('tempdb..##DeadWoodTables') IS NULL
+BEGIN
+	CREATE TABLE ##DeadWoodTables
+	(
+		dbname sysname not null,
+		schemaname sysname not null, 
+		tablename sysname not null,
+		searchcol VARCHAR(8000),
+		pk varchar(8000),
+		lvl INT,
+		pk_searchcol varchar(8000),
+		ignore BIT
+	)
+	
+	IF @Silent=0
+	BEGIN
+		SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+		RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - ##DeadWoodTables created]', 10, 1, @stars, @now) WITH NOWAIT
+	END
+END
+ELSE
+BEGIN
+	IF @Silent=0
+	BEGIN
+		SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+		RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - ##DeadWoodTables reused]', 10, 1, @stars, @now) WITH NOWAIT
+	END
+END
+
+
+
+
+
+/*
+	Populating ##DeadWoodTables_bak with "DeadWood targets" as needed.
+*/
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - Refreshing Targets]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+TRUNCATE TABLE ##DeadWoodTables
+TRUNCATE TABLE dbo.DeadWoodTables
+TRUNCATE TABLE dbo.AllTablesColumns
+
+EXEC usp_sp1_RunProcess @IncludeTargetsWherePKEqualSearchColumn=@IncludeTargetsWherePKEqualSearchColumn, @Silent=@Silent
+
+INSERT INTO dbo.DeadWoodTables (dbname, schemaname, tablename, searchcol, pk, lvl, pk_searchcol, ignore)
+SELECT dbname, schemaname, tablename, searchcol, pk, lvl, COALESCE(pk, searchcol), ignore
+FROM ##DeadWoodTables (NOLOCK)
+
+DELETE dbo.DeadWoodTables
+WHERE dbname + schemaname + tablename + searchcol IN (
+	SELECT 
+		'[' + DBName1 + 
+		'][' + SchemaName1 + 
+		'][' + TableName1 +
+		']' + SearchColumns
+	FROM dbo.DeadWoodTargetKeyException
+	WHERE ExceptionAction = 'DELETE'
+)
+
+INSERT INTO dbo.AllTablesColumns (DatabaseName, TableName, SchemaName, ColumnName)
+SELECT DatabaseName, TableName, SchemaName, ColumnName
+FROM ##AllTablesColumns (NOLOCK)
+
+UPDATE STATISTICS dbo.DeadWoodTables WITH FULLSCAN
+UPDATE STATISTICS dbo.DeadWoodTables [IX_DeadwoodTables_1] WITH FULLSCAN
+UPDATE STATISTICS dbo.AllTablesColumns WITH FULLSCAN
+UPDATE STATISTICS dbo.AllTablesColumns [IX_AllTablesColumns_ColumnName_DatabaseName] WITH FULLSCAN
+UPDATE STATISTICS dbo.AllTablesColumns [IX_AllTablesColumns_ColumnName_DatabaseName_TableName] WITH FULLSCAN
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - Done Refreshing Targets]', 10, 1, @stars, @now) WITH NOWAIT
+END
+
+
+
+
+
+IF @Silent=0
+BEGIN
+	SET @now = CONVERT(VARCHAR(25), GetDate(), 120)
+	RAISERROR ('%s %s [up_DeadWood_MemberOnlySetup - end]', 10, 1, @stars, @now) WITH NOWAIT
+END

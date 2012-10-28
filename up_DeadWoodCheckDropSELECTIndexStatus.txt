@@ -1,0 +1,58 @@
+USE [mnDBA]
+GO
+/****** Object:  StoredProcedure [dbo].[up_DeadWoodCheckDropSELECTIndexStatus]    Script Date: 10/26/2011 17:46:26 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+/*
+	This procedure is used to check the values in several tables during SQL command processing.
+*/
+ALTER PROCEDURE [dbo].[up_DeadWoodCheckDropSELECTIndexStatus]
+AS
+SET NOCOUNT ON
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+
+DECLARE @StartDeadWood BIT, @StartDate DATETIME
+
+SET @StartDeadWood = 0
+SET @StartDate = GetDate()
+
+/*
+	When this procedure is called, the DeadWoodSQLStatements is checked to determine if all indexes have been created.
+	This is the case if all records in DeadWoodSQLStatements have non-NULL values for ProcessDate where ProcessDate BETWEEN 1990 AND 2010.
+*/
+IF NOT EXISTS (SELECT 1 FROM dbo.DeadWoodSQLStatements WHERE ProcessDate IS NULL)
+BEGIN
+	IF NOT EXISTS (SELECT 1 FROM dbo.DeadWoodSQLStatements WHERE ProcessDate NOT BETWEEN '1/1/1990' AND '12/31/2010')
+	BEGIN
+		--All index statements have been processed, proceed to run DeadWood.
+		SET @StartDeadWood = 1
+	END
+END
+
+IF @StartDeadWood = 1
+BEGIN
+	TRUNCATE TABLE dbo.DeadWoodSQLStatements
+	TRUNCATE TABLE dbo.SQLCmdErrorLog
+	TRUNCATE TABLE dbo.DeadWoodSlowStatements
+	TRUNCATE TABLE dbo.DeadWoodDatabaseProcessing
+	
+	--Disable the job that called this procedure now that we're starting DeadWood.
+	EXEC up_DeadWoodEnableDisableJobs @NumJobs=1,   @EnableBit=0, @JobType='Start DeadWood'
+	
+	INSERT INTO dbo.DeadWoodTiming ([Message], StartDate, EndDate)
+	SELECT 'up_DeadWoodCheckDropSELECTIndexStatus', @StartDate, GetDate()
+
+	EXEC up_DeadWood
+		@StartLastLogonDate='1990-01-01 00:00:00',
+		@EndLastLogonDate='2007-12-31 23:59:59',
+		@RefreshTargets=1,
+		@MinDeadWoodSQLStatementsID=-1,
+		@MaxDeadWoodSQLStatementsID=-1,
+		@IncludeTargetsWherePKEqualSearchColumn=0
+		
+	--Enable the job that searches for databases ready to be shrunk.
+	EXEC up_DeadWoodEnableDisableJobs @NumJobs=1, @EnableBit=1, @JobType='PreShrink'
+END

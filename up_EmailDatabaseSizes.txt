@@ -1,0 +1,98 @@
+ALTER PROCEDURE dbo.up_EmailDatabaseSizes
+AS
+SET NOCOUNT ON
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+
+CREATE TABLE #Results (
+	[name] SYSNAME,
+	db_size NVARCHAR(13),
+	[owner] SYSNAME,
+	[dbid] SMALLINT,
+	[created] NVARCHAR(11),
+	[status] NVARCHAR(600),
+	[compatibility_level] TINYINT
+)
+DECLARE @ID INT
+DECLARE @SizeMB DECIMAL(18, 2)
+DECLARE @Database SYSNAME
+DECLARE @DatabasesShrunk TABLE (ID INT IDENTITY(1,1), DatabaseName SYSNAME)
+DECLARE @Text VARCHAR(MAX) = ''
+
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('epAccess')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('epAuthorization')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('epOrder')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('epPayment')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('epRenewal')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('epValidation')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnActivityRecording')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnAdmin')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnAlert')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnAPI')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnContent')
+SET @ID = 1
+WHILE @ID < 25
+BEGIN
+	INSERT INTO @DatabasesShrunk (DatabaseName) SELECT 'mnFile' + CONVERT(VARCHAR, @ID)
+	SET @ID += 1
+END
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnFileExchange')
+SET @ID = 1
+WHILE @ID < 25
+BEGIN
+	INSERT INTO @DatabasesShrunk (DatabaseName) SELECT 'mnImail' + CONVERT(VARCHAR, @ID)
+	SET @ID += 1
+END
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnKey1')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnKey2')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnKey3')
+SET @ID = 1
+WHILE @ID < 25
+BEGIN
+	INSERT INTO @DatabasesShrunk (DatabaseName) SELECT 'mnList' + CONVERT(VARCHAR, @ID)
+	SET @ID += 1
+END
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnLogon')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnLookup')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnMailLog')
+SET @ID = 1
+WHILE @ID < 25
+BEGIN
+	INSERT INTO @DatabasesShrunk (DatabaseName) SELECT 'mnMember' + CONVERT(VARCHAR, @ID)
+	SET @ID += 1
+END
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnMemberApproval')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnPhotoStore')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnPremiumServices')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnRegion')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnSearchStore')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnSystem')
+INSERT INTO @DatabasesShrunk (DatabaseName) VALUES ('mnXmail')
+
+INSERT INTO #Results
+EXEC sp_helpdb
+    
+DECLARE cur CURSOR FOR
+SELECT d.DatabaseName, CONVERT(DECIMAL(18, 4), REPLACE(REPLACE(r.db_size, ' ', ''), 'MB', ''))
+FROM #Results r JOIN @DatabasesShrunk d ON r.[name] = d.DatabaseName
+ORDER BY d.DatabaseName
+
+OPEN cur
+
+FETCH NEXT FROM cur INTO @Database, @SizeMB
+
+SET @Text += 'Name   Size (MB)' + CHAR(13) + CHAR(10)
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+	SET @Text += @Database + '   ' + CONVERT(VARCHAR, @SizeMB) + CHAR(13) + CHAR(10)
+	FETCH NEXT FROM cur INTO @Database, @SizeMB
+END
+
+CLOSE cur
+DEALLOCATE cur
+
+EXEC msdb.dbo.sp_send_dbmail
+    @profile_name='admin',
+    @recipients='gcollazo@spark.net',
+    @subject='DW Database Sizes',
+    @body=@Text
